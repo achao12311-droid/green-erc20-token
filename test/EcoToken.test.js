@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
@@ -115,6 +117,21 @@ describe("EcoToken", function () {
     expect(await token.lastBlockTime()).to.equal(last + 60n);
     expect((await token.blocks(2)).producer).to.equal(alice.address);
     expect(await token.balanceOf(alice.address)).to.equal(ethers.parseEther("4"));
+  });
+
+  it("mints the published gram record", async function () {
+    const csv = fs.readFileSync(path.join(__dirname, "../records/action-1.csv"), "utf8").trim().split(/\r?\n/);
+    const [actionId, grams, nonce] = csv[1].split(",").map((value) => BigInt(value.trim()));
+    const { token, deployer, alice } = await deploy(0n);
+    const signature = await signMint(deployer, token, alice.address, actionId, grams, nonce);
+    const amount = (grams * 10n ** 18n) / 1000n;
+
+    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, signature))
+      .to.emit(token, "Minted")
+      .withArgs(actionId, alice.address, grams, amount);
+
+    expect(amount).to.equal(ethers.parseEther("5"));
+    expect(await token.balanceOf(alice.address)).to.equal(amount);
   });
 
   it("mints from a signed record and the coins can be transferred", async function () {

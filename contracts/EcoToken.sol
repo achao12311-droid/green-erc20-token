@@ -10,8 +10,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 
 /// @title EcoToken
 /// @notice ERC-20 with a fixed supply. New ECO is minted only from a signed record.
-/// @dev {produceBlock} stores a timestamp inside this contract. It does not mint,
-///      and it is not Ethereum consensus.
+/// @dev 1000 grams in a signed record mint 1 ECO, and supply cannot pass {MAX_SUPPLY}.
 contract EcoToken is ERC20, ERC20Permit, Ownable2Step {
     uint256 public constant BLOCK_INTERVAL = 60;
     uint256 public constant MAX_SUPPLY = 1_000_000 ether;
