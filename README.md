@@ -10,9 +10,9 @@ The measurement for action 1 is in [records/action-1.csv](records/action-1.csv).
 
 | actionId | grams | ECO minted |
 | --- | --- | --- |
-| 1 | 5000 | 5 |
+| 1 | 5 | 0.005 |
 
-`records/action-1.csv` is the record. The test `mints the published gram record` signs that row and checks that the contract mints 5 ECO. Replace the grams in that file with your own measurement before you treat the number as a field result.
+`records/action-1.csv` is the record. `records/action-1-method.txt` says how the grams were calculated: one A4 sheet at 80 grams per square metre is 4.9896 grams, stored as 5 whole grams. The test `mints the published gram record` signs that row and checks that the contract mints 0.005 ECO. This computer has no scale, so this is a paper-size calculation, not a scale reading.
 
 ## Send and receive
 
@@ -22,9 +22,9 @@ To let someone else pull ECO, call `approve(spender, amount)`. They then call `t
 
 ## Signed mint
 
-`mintWithAttestation(to, actionId, grams, nonce, signature)` mints to `to`.
+`mintWithAttestation(to, actionId, grams, nonce, deadline, signature)` mints to `to`.
 
-The signature is an Ethereum signed message over `keccak256(abi.encode(token, to, actionId, grams, nonce))`. The signer must be `attester()`, which is the current owner. A mint that would pass `MAX_SUPPLY` reverts with `MaxSupplyExceeded`.
+The attester signs EIP-712 typed data, type `Mint(address to,uint256 actionId,uint256 grams,uint256 nonce,uint256 deadline)`, for the EcoToken domain on this chain. A wallet shows those fields before signing. The signature is tied to this contract and chain id, and it is rejected after `deadline`. The signer must be `attester()`, which is the current owner. A mint that would pass `MAX_SUPPLY` reverts with `MaxSupplyExceeded`. A mint to the token contract itself reverts with `MintToContract`.
 
 ## Stake
 

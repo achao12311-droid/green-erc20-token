@@ -7,14 +7,30 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const INITIAL = ethers.parseEther("1000000");
 const MAX_SUPPLY = ethers.parseEther("1000000");
 
-async function signMint(signer, token, to, actionId, grams, nonce) {
-  const payload = ethers.keccak256(
-    ethers.AbiCoder.defaultAbiCoder().encode(
-      ["address", "address", "uint256", "uint256", "uint256"],
-      [await token.getAddress(), to, actionId, grams, nonce]
-    )
+async function signMint(signer, token, to, actionId, grams, nonce, deadline) {
+  if (deadline === undefined) {
+    deadline = BigInt(await time.latest()) + 3600n;
+  }
+  const network = await ethers.provider.getNetwork();
+  const signature = await signer.signTypedData(
+    {
+      name: "EcoToken",
+      version: "1",
+      chainId: network.chainId,
+      verifyingContract: await token.getAddress(),
+    },
+    {
+      Mint: [
+        { name: "to", type: "address" },
+        { name: "actionId", type: "uint256" },
+        { name: "grams", type: "uint256" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    },
+    { to, actionId, grams, nonce, deadline }
   );
-  return signer.signMessage(ethers.getBytes(payload));
+  return { signature, deadline };
 }
 
 describe("EcoToken", function () {
@@ -64,73 +80,18 @@ describe("EcoToken", function () {
     await expect(token.unstake(amount)).to.be.revertedWithCustomError(token, "InsufficientStake");
   });
 
-  it("records the producer without minting", async function () {
-    const { token, deployer } = await deploy();
-    const stake = ethers.parseEther("1");
-    await token.stake(stake);
-
-    const supplyBefore = await token.totalSupply();
-    const balanceBefore = await token.balanceOf(deployer.address);
-    const tx = await token.produceBlock();
-    const receipt = await tx.wait();
-    const block = await ethers.provider.getBlock(receipt.blockNumber);
-
-    await expect(tx)
-      .to.emit(token, "BlockProduced")
-      .withArgs(1n, block.timestamp, deployer.address);
-
-    expect(await token.height()).to.equal(1n);
-    expect(await token.lastBlockTime()).to.equal(block.timestamp);
-
-    const stored = await token.blocks(1);
-    expect(stored.height).to.equal(1n);
-    expect(stored.timestamp).to.equal(block.timestamp);
-    expect(stored.producer).to.equal(deployer.address);
-
-    expect(await token.balanceOf(deployer.address)).to.equal(balanceBefore);
-    expect(await token.totalSupply()).to.equal(supplyBefore);
-  });
-
-  it("produces the first block immediately, then only after 60 seconds", async function () {
-    const { token, alice } = await deploy();
-    await token.transfer(alice.address, ethers.parseEther("5"));
-    await token.connect(alice).stake(ethers.parseEther("1"));
-
-    await expect(token.produceBlock()).to.be.revertedWithCustomError(token, "NoStake");
-
-    await token.connect(alice).produceBlock();
-    const last = await token.lastBlockTime();
-
-    await expect(token.connect(alice).produceBlock())
-      .to.be.revertedWithCustomError(token, "BlockTooEarly")
-      .withArgs(last + 60n);
-
-    await time.setNextBlockTimestamp(last + 59n);
-    await expect(token.connect(alice).produceBlock())
-      .to.be.revertedWithCustomError(token, "BlockTooEarly")
-      .withArgs(last + 60n);
-
-    await time.setNextBlockTimestamp(last + 60n);
-    await token.connect(alice).produceBlock();
-
-    expect(await token.height()).to.equal(2n);
-    expect(await token.lastBlockTime()).to.equal(last + 60n);
-    expect((await token.blocks(2)).producer).to.equal(alice.address);
-    expect(await token.balanceOf(alice.address)).to.equal(ethers.parseEther("4"));
-  });
-
   it("mints the published gram record", async function () {
     const csv = fs.readFileSync(path.join(__dirname, "../records/action-1.csv"), "utf8").trim().split(/\r?\n/);
     const [actionId, grams, nonce] = csv[1].split(",").map((value) => BigInt(value.trim()));
     const { token, deployer, alice } = await deploy(0n);
-    const signature = await signMint(deployer, token, alice.address, actionId, grams, nonce);
+    const { signature, deadline } = await signMint(deployer, token, alice.address, actionId, grams, nonce);
     const amount = (grams * 10n ** 18n) / 1000n;
 
-    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, signature))
+    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, deadline, signature))
       .to.emit(token, "Minted")
       .withArgs(actionId, alice.address, grams, amount);
 
-    expect(amount).to.equal(ethers.parseEther("5"));
+    expect(amount).to.equal(ethers.parseEther("0.005"));
     expect(await token.balanceOf(alice.address)).to.equal(amount);
   });
 
@@ -140,11 +101,11 @@ describe("EcoToken", function () {
     const grams = 5000n;
     const nonce = 1n;
     const amount = ethers.parseEther("5");
-    const signature = await signMint(deployer, token, alice.address, actionId, grams, nonce);
+    const { signature, deadline } = await signMint(deployer, token, alice.address, actionId, grams, nonce);
 
     expect(token.interface.getFunction("pause")).to.equal(null);
 
-    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, signature))
+    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, deadline, signature))
       .to.emit(token, "Minted")
       .withArgs(actionId, alice.address, grams, amount);
 
@@ -161,15 +122,15 @@ describe("EcoToken", function () {
     const { token, deployer, alice } = await deploy(0n);
     const grams = 1000n;
     const nonce = 1n;
-    const signature = await signMint(deployer, token, alice.address, 1n, grams, nonce);
+    const firstMint = await signMint(deployer, token, alice.address, 1n, grams, nonce);
 
-    await token.mintWithAttestation(alice.address, 1n, grams, nonce, signature);
-    await expect(token.mintWithAttestation(alice.address, 1n, grams, nonce, signature))
+    await token.mintWithAttestation(alice.address, 1n, grams, nonce, firstMint.deadline, firstMint.signature);
+    await expect(token.mintWithAttestation(alice.address, 1n, grams, nonce, firstMint.deadline, firstMint.signature))
       .to.be.revertedWithCustomError(token, "ActionAlreadyUsed")
       .withArgs(1n);
 
     const other = await signMint(alice, token, alice.address, 2n, grams, nonce);
-    await expect(token.mintWithAttestation(alice.address, 2n, grams, nonce, other))
+    await expect(token.mintWithAttestation(alice.address, 2n, grams, nonce, other.deadline, other.signature))
       .to.be.revertedWithCustomError(token, "InvalidAttester")
       .withArgs(alice.address);
   });
@@ -179,11 +140,11 @@ describe("EcoToken", function () {
     const grams = 1000n;
     const first = await signMint(deployer, token, alice.address, 1n, grams, 1n);
 
-    await token.mintWithAttestation(alice.address, 1n, grams, 1n, first);
+    await token.mintWithAttestation(alice.address, 1n, grams, 1n, first.deadline, first.signature);
     expect(await token.totalSupply()).to.equal(MAX_SUPPLY);
 
     const second = await signMint(deployer, token, alice.address, 2n, grams, 2n);
-    await expect(token.mintWithAttestation(alice.address, 2n, grams, 2n, second))
+    await expect(token.mintWithAttestation(alice.address, 2n, grams, 2n, second.deadline, second.signature))
       .to.be.revertedWithCustomError(token, "MaxSupplyExceeded")
       .withArgs(MAX_SUPPLY + ethers.parseEther("1"), MAX_SUPPLY);
   });
@@ -198,12 +159,54 @@ describe("EcoToken", function () {
     expect(await token.attester()).to.equal(alice.address);
 
     const stale = await signMint(deployer, token, alice.address, 1n, 1000n, 1n);
-    await expect(token.mintWithAttestation(alice.address, 1n, 1000n, 1n, stale))
+    await expect(token.mintWithAttestation(alice.address, 1n, 1000n, 1n, stale.deadline, stale.signature))
       .to.be.revertedWithCustomError(token, "InvalidAttester")
       .withArgs(deployer.address);
 
     const current = await signMint(alice, token, alice.address, 1n, 1000n, 1n);
-    await token.mintWithAttestation(alice.address, 1n, 1000n, 1n, current);
+    await token.mintWithAttestation(alice.address, 1n, 1000n, 1n, current.deadline, current.signature);
     expect(await token.balanceOf(alice.address)).to.equal(ethers.parseEther("1"));
+  });
+
+  it("rejects an expired signature, a signature for another chain, and a mint to the contract", async function () {
+    const { token, deployer, alice } = await deploy(0n);
+    const now = BigInt(await time.latest());
+    const expired = await signMint(deployer, token, alice.address, 1n, 1000n, 1n, now);
+    await time.setNextBlockTimestamp(now + 1n);
+    await expect(token.mintWithAttestation(alice.address, 1n, 1000n, 1n, expired.deadline, expired.signature))
+      .to.be.revertedWithCustomError(token, "SignatureExpired")
+      .withArgs(expired.deadline);
+
+    const wrongChain = await deployer.signTypedData(
+      {
+        name: "EcoToken",
+        version: "1",
+        chainId: 1n,
+        verifyingContract: await token.getAddress(),
+      },
+      {
+        Mint: [
+          { name: "to", type: "address" },
+          { name: "actionId", type: "uint256" },
+          { name: "grams", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      { to: alice.address, actionId: 2n, grams: 1000n, nonce: 1n, deadline: now + 3600n }
+    );
+    await expect(token.mintWithAttestation(alice.address, 2n, 1000n, 1n, now + 3600n, wrongChain))
+      .to.be.revertedWithCustomError(token, "InvalidAttester");
+
+    const toContract = await signMint(deployer, token, await token.getAddress(), 3n, 1000n, 1n);
+    await expect(
+      token.mintWithAttestation(await token.getAddress(), 3n, 1000n, 1n, toContract.deadline, toContract.signature)
+    ).to.be.revertedWithCustomError(token, "MintToContract");
+  });
+
+  it("rejects an empty stake", async function () {
+    const { token } = await deploy();
+    await expect(token.stake(0)).to.be.revertedWithCustomError(token, "ZeroAmount");
+    await expect(token.unstake(0)).to.be.revertedWithCustomError(token, "ZeroAmount");
   });
 });

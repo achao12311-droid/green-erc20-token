@@ -1,0 +1,10 @@
+Action 1 is one sheet of ordinary A4 office paper.
+
+The sheet was not placed on a scale. This computer has no scale, so the grams are calculated from the paper size and the usual office-paper weight.
+
+A4 size is 210 mm by 297 mm, which is 0.06237 square metres.
+Ordinary office paper is 80 grams per square metre.
+0.06237 x 80 = 4.9896 grams.
+
+The contract counts whole grams, so the record stores 5 grams.
+5 grams mint 0.005 ECO, because 1000 grams mint 1 ECO.
