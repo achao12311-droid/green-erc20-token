@@ -4,10 +4,20 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
-const INITIAL = ethers.parseEther("1000000");
+const INITIAL = ethers.parseEther("900000");
 const MAX_SUPPLY = ethers.parseEther("1000000");
+const MINT_TYPES = {
+  Mint: [
+    { name: "to", type: "address" },
+    { name: "actionId", type: "uint256" },
+    { name: "grams", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+    { name: "recordHash", type: "bytes32" },
+  ],
+};
 
-async function signMint(signer, token, to, actionId, grams, nonce, deadline) {
+async function signMint(signer, token, to, actionId, grams, nonce, deadline, recordHash = ethers.ZeroHash) {
   if (deadline === undefined) {
     deadline = BigInt(await time.latest()) + 3600n;
   }
@@ -19,18 +29,10 @@ async function signMint(signer, token, to, actionId, grams, nonce, deadline) {
       chainId: network.chainId,
       verifyingContract: await token.getAddress(),
     },
-    {
-      Mint: [
-        { name: "to", type: "address" },
-        { name: "actionId", type: "uint256" },
-        { name: "grams", type: "uint256" },
-        { name: "nonce", type: "uint256" },
-        { name: "deadline", type: "uint256" },
-      ],
-    },
-    { to, actionId, grams, nonce, deadline }
+    MINT_TYPES,
+    { to, actionId, grams, nonce, deadline, recordHash }
   );
-  return { signature, deadline };
+  return { signature, deadline, recordHash };
 }
 
 describe("EcoToken", function () {
@@ -84,12 +86,16 @@ describe("EcoToken", function () {
     const csv = fs.readFileSync(path.join(__dirname, "../records/action-1.csv"), "utf8").trim().split(/\r?\n/);
     const [actionId, grams, nonce] = csv[1].split(",").map((value) => BigInt(value.trim()));
     const { token, deployer, alice } = await deploy(0n);
-    const { signature, deadline } = await signMint(deployer, token, alice.address, actionId, grams, nonce);
+    const method = fs.readFileSync(path.join(__dirname, "../records/action-1-method.txt"));
+    const recordHash = ethers.keccak256(method);
+    const signed = await signMint(deployer, token, alice.address, actionId, grams, nonce, undefined, recordHash);
     const amount = (grams * 10n ** 18n) / 1000n;
 
-    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, deadline, signature))
+    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, signed.deadline, signed.recordHash, signed.signature))
       .to.emit(token, "Minted")
-      .withArgs(actionId, alice.address, grams, amount);
+      .withArgs(actionId, alice.address, grams, amount, recordHash);
+
+    expect(await token.recordHashes(actionId)).to.equal(recordHash);
 
     expect(amount).to.equal(ethers.parseEther("0.005"));
     expect(await token.balanceOf(alice.address)).to.equal(amount);
@@ -101,13 +107,13 @@ describe("EcoToken", function () {
     const grams = 5000n;
     const nonce = 1n;
     const amount = ethers.parseEther("5");
-    const { signature, deadline } = await signMint(deployer, token, alice.address, actionId, grams, nonce);
+    const { signature, deadline, recordHash } = await signMint(deployer, token, alice.address, actionId, grams, nonce);
 
     expect(token.interface.getFunction("pause")).to.equal(null);
 
-    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, deadline, signature))
+    await expect(token.mintWithAttestation(alice.address, actionId, grams, nonce, deadline, recordHash, signature))
       .to.emit(token, "Minted")
-      .withArgs(actionId, alice.address, grams, amount);
+      .withArgs(actionId, alice.address, grams, amount, recordHash);
 
     expect(await token.balanceOf(alice.address)).to.equal(amount);
     expect(await token.totalSupply()).to.equal(amount);
@@ -124,13 +130,25 @@ describe("EcoToken", function () {
     const nonce = 1n;
     const firstMint = await signMint(deployer, token, alice.address, 1n, grams, nonce);
 
-    await token.mintWithAttestation(alice.address, 1n, grams, nonce, firstMint.deadline, firstMint.signature);
-    await expect(token.mintWithAttestation(alice.address, 1n, grams, nonce, firstMint.deadline, firstMint.signature))
+    await token.mintWithAttestation(
+      alice.address,
+      1n,
+      grams,
+      nonce,
+      firstMint.deadline,
+      firstMint.recordHash,
+      firstMint.signature
+    );
+    await expect(
+      token.mintWithAttestation(alice.address, 1n, grams, nonce, firstMint.deadline, firstMint.recordHash, firstMint.signature)
+    )
       .to.be.revertedWithCustomError(token, "ActionAlreadyUsed")
       .withArgs(1n);
 
     const other = await signMint(alice, token, alice.address, 2n, grams, nonce);
-    await expect(token.mintWithAttestation(alice.address, 2n, grams, nonce, other.deadline, other.signature))
+    await expect(
+      token.mintWithAttestation(alice.address, 2n, grams, nonce, other.deadline, other.recordHash, other.signature)
+    )
       .to.be.revertedWithCustomError(token, "InvalidAttester")
       .withArgs(alice.address);
   });
@@ -140,11 +158,13 @@ describe("EcoToken", function () {
     const grams = 1000n;
     const first = await signMint(deployer, token, alice.address, 1n, grams, 1n);
 
-    await token.mintWithAttestation(alice.address, 1n, grams, 1n, first.deadline, first.signature);
+    await token.mintWithAttestation(alice.address, 1n, grams, 1n, first.deadline, first.recordHash, first.signature);
     expect(await token.totalSupply()).to.equal(MAX_SUPPLY);
 
     const second = await signMint(deployer, token, alice.address, 2n, grams, 2n);
-    await expect(token.mintWithAttestation(alice.address, 2n, grams, 2n, second.deadline, second.signature))
+    await expect(
+      token.mintWithAttestation(alice.address, 2n, grams, 2n, second.deadline, second.recordHash, second.signature)
+    )
       .to.be.revertedWithCustomError(token, "MaxSupplyExceeded")
       .withArgs(MAX_SUPPLY + ethers.parseEther("1"), MAX_SUPPLY);
   });
@@ -159,12 +179,22 @@ describe("EcoToken", function () {
     expect(await token.attester()).to.equal(alice.address);
 
     const stale = await signMint(deployer, token, alice.address, 1n, 1000n, 1n);
-    await expect(token.mintWithAttestation(alice.address, 1n, 1000n, 1n, stale.deadline, stale.signature))
+    await expect(
+      token.mintWithAttestation(alice.address, 1n, 1000n, 1n, stale.deadline, stale.recordHash, stale.signature)
+    )
       .to.be.revertedWithCustomError(token, "InvalidAttester")
       .withArgs(deployer.address);
 
     const current = await signMint(alice, token, alice.address, 1n, 1000n, 1n);
-    await token.mintWithAttestation(alice.address, 1n, 1000n, 1n, current.deadline, current.signature);
+    await token.mintWithAttestation(
+      alice.address,
+      1n,
+      1000n,
+      1n,
+      current.deadline,
+      current.recordHash,
+      current.signature
+    );
     expect(await token.balanceOf(alice.address)).to.equal(ethers.parseEther("1"));
   });
 
@@ -173,7 +203,17 @@ describe("EcoToken", function () {
     const now = BigInt(await time.latest());
     const expired = await signMint(deployer, token, alice.address, 1n, 1000n, 1n, now);
     await time.setNextBlockTimestamp(now + 1n);
-    await expect(token.mintWithAttestation(alice.address, 1n, 1000n, 1n, expired.deadline, expired.signature))
+    await expect(
+      token.mintWithAttestation(
+        alice.address,
+        1n,
+        1000n,
+        1n,
+        expired.deadline,
+        expired.recordHash,
+        expired.signature
+      )
+    )
       .to.be.revertedWithCustomError(token, "SignatureExpired")
       .withArgs(expired.deadline);
 
@@ -184,23 +224,23 @@ describe("EcoToken", function () {
         chainId: 1n,
         verifyingContract: await token.getAddress(),
       },
-      {
-        Mint: [
-          { name: "to", type: "address" },
-          { name: "actionId", type: "uint256" },
-          { name: "grams", type: "uint256" },
-          { name: "nonce", type: "uint256" },
-          { name: "deadline", type: "uint256" },
-        ],
-      },
-      { to: alice.address, actionId: 2n, grams: 1000n, nonce: 1n, deadline: now + 3600n }
+        MINT_TYPES,
+      { to: alice.address, actionId: 2n, grams: 1000n, nonce: 1n, deadline: now + 3600n, recordHash: ethers.ZeroHash }
     );
-    await expect(token.mintWithAttestation(alice.address, 2n, 1000n, 1n, now + 3600n, wrongChain))
+    await expect(token.mintWithAttestation(alice.address, 2n, 1000n, 1n, now + 3600n, ethers.ZeroHash, wrongChain))
       .to.be.revertedWithCustomError(token, "InvalidAttester");
 
     const toContract = await signMint(deployer, token, await token.getAddress(), 3n, 1000n, 1n);
     await expect(
-      token.mintWithAttestation(await token.getAddress(), 3n, 1000n, 1n, toContract.deadline, toContract.signature)
+      token.mintWithAttestation(
+        await token.getAddress(),
+        3n,
+        1000n,
+        1n,
+        toContract.deadline,
+        toContract.recordHash,
+        toContract.signature
+      )
     ).to.be.revertedWithCustomError(token, "MintToContract");
   });
 
@@ -208,5 +248,16 @@ describe("EcoToken", function () {
     const { token } = await deploy();
     await expect(token.stake(0)).to.be.revertedWithCustomError(token, "ZeroAmount");
     await expect(token.unstake(0)).to.be.revertedWithCustomError(token, "ZeroAmount");
+  });
+
+  it("rejects a direct transfer into the contract and a full-cap starting supply", async function () {
+    const { token } = await deploy();
+    await expect(token.transfer(await token.getAddress(), 1n)).to.be.revertedWithCustomError(
+      token,
+      "DirectTransferToContract"
+    );
+
+    const factory = await ethers.getContractFactory("EcoToken");
+    await expect(factory.deploy(MAX_SUPPLY)).to.be.revertedWithCustomError(factory, "MaxSupplyExceeded");
   });
 });

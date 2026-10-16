@@ -23,19 +23,29 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step {
     error ZeroAmount();
     error SignatureExpired(uint256 deadline);
     error MintToContract();
+    error DirectTransferToContract();
 
-    bytes32 private constant MINT_TYPEHASH =
-        keccak256("Mint(address to,uint256 actionId,uint256 grams,uint256 nonce,uint256 deadline)");
+    bytes32 private constant MINT_TYPEHASH = keccak256(
+        "Mint(address to,uint256 actionId,uint256 grams,uint256 nonce,uint256 deadline,bytes32 recordHash)"
+    );
 
     mapping(address => uint256) public staked;
     mapping(uint256 => bool) public usedActions;
+    mapping(uint256 => bytes32) public recordHashes;
+    bool private locking;
 
     event Staked(address indexed account, uint256 amount);
     event Unstaked(address indexed account, uint256 amount);
-    event Minted(uint256 indexed actionId, address indexed to, uint256 grams, uint256 amount);
+    event Minted(
+        uint256 indexed actionId,
+        address indexed to,
+        uint256 grams,
+        uint256 amount,
+        bytes32 recordHash
+    );
 
     constructor(uint256 initialSupply) ERC20("EcoToken", "ECO") ERC20Permit("EcoToken") Ownable(msg.sender) {
-        if (initialSupply > MAX_SUPPLY) revert MaxSupplyExceeded(initialSupply, MAX_SUPPLY);
+        if (initialSupply >= MAX_SUPPLY) revert MaxSupplyExceeded(initialSupply, MAX_SUPPLY);
         if (initialSupply > 0) {
             _mint(msg.sender, initialSupply);
         }
@@ -48,7 +58,9 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step {
 
     function stake(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
+        locking = true;
         _transfer(msg.sender, address(this), amount);
+        locking = false;
         staked[msg.sender] += amount;
         emit Staked(msg.sender, amount);
     }
@@ -66,12 +78,14 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step {
     /// @param actionId Unique id of the off-chain record. Reuse reverts.
     /// @param grams Measured grams from that record. This sets the minted amount.
     /// @param deadline Timestamp after which the signature is rejected.
+    /// @param recordHash keccak256 of the published measurement note for this action.
     function mintWithAttestation(
         address to,
         uint256 actionId,
         uint256 grams,
         uint256 nonce,
         uint256 deadline,
+        bytes32 recordHash,
         bytes calldata signature
     ) external {
         if (usedActions[actionId]) revert ActionAlreadyUsed(actionId);
@@ -79,7 +93,7 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step {
         if (to == address(this)) revert MintToContract();
         if (block.timestamp > deadline) revert SignatureExpired(deadline);
 
-        bytes32 structHash = keccak256(abi.encode(MINT_TYPEHASH, to, actionId, grams, nonce, deadline));
+        bytes32 structHash = keccak256(abi.encode(MINT_TYPEHASH, to, actionId, grams, nonce, deadline, recordHash));
         address signer = ECDSA.recover(_hashTypedDataV4(structHash), signature);
         if (signer != attester()) revert InvalidAttester(signer);
 
@@ -88,7 +102,13 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step {
         if (nextSupply > MAX_SUPPLY) revert MaxSupplyExceeded(nextSupply, MAX_SUPPLY);
 
         usedActions[actionId] = true;
+        recordHashes[actionId] = recordHash;
         _mint(to, amount);
-        emit Minted(actionId, to, grams, amount);
+        emit Minted(actionId, to, grams, amount, recordHash);
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (to == address(this) && !locking) revert DirectTransferToContract();
+        super._update(from, to, value);
     }
 }

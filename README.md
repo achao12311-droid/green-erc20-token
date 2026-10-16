@@ -4,6 +4,8 @@
 
 EcoToken (ECO) is an ERC-20 you can send, receive, and stake. Supply is capped at 1,000,000 ECO. New coins are minted only when the attester signs a record of measured grams: 1,000 grams mint 1 ECO. The caller does not choose the amount. The same record cannot be used twice. Transfers cannot be paused, so the owner cannot freeze a balance. The attester changes only after `transferOwnership` and `acceptOwnership`.
 
+繁體中文說明在 [README.zh-TW.md](README.zh-TW.md)。
+
 ## Published record
 
 The measurement for action 1 is in [records/action-1.csv](records/action-1.csv).
@@ -22,9 +24,11 @@ To let someone else pull ECO, call `approve(spender, amount)`. They then call `t
 
 ## Signed mint
 
-`mintWithAttestation(to, actionId, grams, nonce, deadline, signature)` mints to `to`.
+`mintWithAttestation(to, actionId, grams, nonce, deadline, recordHash, signature)` mints to `to`.
 
-The attester signs EIP-712 typed data, type `Mint(address to,uint256 actionId,uint256 grams,uint256 nonce,uint256 deadline)`, for the EcoToken domain on this chain. A wallet shows those fields before signing. The signature is tied to this contract and chain id, and it is rejected after `deadline`. The signer must be `attester()`, which is the current owner. A mint that would pass `MAX_SUPPLY` reverts with `MaxSupplyExceeded`. A mint to the token contract itself reverts with `MintToContract`.
+The attester signs EIP-712 typed data, type `Mint(address to,uint256 actionId,uint256 grams,uint256 nonce,uint256 deadline,bytes32 recordHash)`, for the EcoToken domain on this chain. A wallet shows those fields before signing. `recordHash` is `keccak256` of the measurement note, so the grams stay tied to that note. The contract stores the hash in `recordHashes(actionId)`. The signature is tied to this contract and chain id, and it is rejected after `deadline`. The signer must be `attester()`, which is the current owner. A mint that would pass `MAX_SUPPLY` reverts with `MaxSupplyExceeded`. A mint to the token contract itself reverts with `MintToContract`.
+
+A normal `transfer` or `transferFrom` into the token contract reverts with `DirectTransferToContract`. Those coins would not be recorded as staked, so only `stake` can lock ECO there. The supply minted at deploy must be below 1,000,000 ECO, so a signed record can still mint afterward.
 
 ## Stake
 
