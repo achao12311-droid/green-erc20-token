@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+    />
+    <title>ECO Wallet</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <section id="gate">
+      <div class="gate-card">
+        <div class="mark" aria-hidden="true">E</div>
+        <h1>ECO Wallet</h1>
+        <p id="gate-copy">Create a wallet on this computer, or open the one already stored here.</p>
+        <div id="gate-home">
+          <button id="show-create" type="button">Create a new wallet</button>
+          <button id="show-open" class="ghost" type="button">Open wallet</button>
+          <button id="show-restore" class="text" type="button">Restore from saved words</button>
+        </div>
+        <form id="gate-create" hidden>
+          <label>Password<input id="create-password" type="password" /></label>
+          <label>Repeat password<input id="create-password-2" type="password" /></label>
+          <button type="submit">Create wallet</button>
+        </form>
+        <form id="gate-open" hidden>
+          <label>Password<input id="open-password" type="password" /></label>
+          <button type="submit">Open</button>
+        </form>
+        <form id="gate-restore" hidden>
+          <label>Saved words<textarea id="restore-phrase" rows="3"></textarea></label>
+          <label>New password<input id="restore-password" type="password" /></label>
+          <button type="submit">Restore</button>
+        </form>
+        <div id="gate-seed" hidden>
+          <p>Write these 12 words on paper. They are the only way back in if you forget the password.</p>
+          <p id="seed-words"></p>
+          <label class="check"><input id="seed-saved" type="checkbox" /> I wrote the words down</label>
+          <button id="seed-continue" type="button" disabled>Continue</button>
+        </div>
+        <p id="gate-status"></p>
+      </div>
+    </section>
+
+    <div id="shell" hidden>
+      <aside>
+        <div class="brand"><span class="mark small">E</span><span>ECO</span></div>
+        <nav>
+          <button type="button" data-page="overview" class="active">Overview</button>
+          <button type="button" data-page="send">Send</button>
+          <button type="button" data-page="receive">Receive</button>
+          <button type="button" data-page="history">Transactions</button>
+          <button type="button" data-page="stake">Stake</button>
+          <button type="button" data-page="settings">Settings</button>
+        </nav>
+      </aside>
+      <div class="workspace">
+        <header>
+          <div>
+            <p class="kicker">Available balance</p>
+            <p class="balance"><span id="available">0</span> <span>ECO</span></p>
+          </div>
+          <div>
+            <p class="kicker">Staked</p>
+            <p class="balance small"><span id="staked">0</span> <span>ECO</span></p>
+          </div>
+        </header>
+        <section id="page-overview" class="page">
+          <h2>Overview</h2>
+          <p class="hint">Locked ECO is your stake. It stays in the contract until you unstake it. This does not add blocks to Ethereum.</p>
+          <div class="split">
+            <article>
+              <p class="kicker">You can send</p>
+              <p class="figure" id="overview-available">0 ECO</p>
+            </article>
+            <article>
+              <p class="kicker">Proof of stake</p>
+              <p class="figure" id="overview-staked">0 ECO</p>
+            </article>
+          </div>
+        </section>
+        <section id="page-send" class="page" hidden>
+          <h2>Send</h2>
+          <label>Address<input id="send-to" spellcheck="false" /></label>
+          <label>Amount<input id="send-amount" inputmode="decimal" /></label>
+          <button id="send" type="button">Send</button>
+        </section>
+        <section id="page-receive" class="page" hidden>
+          <h2>Receive</h2>
+          <div class="receive">
+            <img id="qr" alt="Wallet address code" />
+            <div>
+              <p class="kicker">Your address</p>
+              <p id="receive-address"></p>
+              <button id="copy-address" type="button">Copy address</button>
+            </div>
+          </div>
+        </section>
+        <section id="page-history" class="page" hidden>
+          <h2>Transactions</h2>
+          <ul id="history-list"></ul>
+        </section>
+        <section id="page-stake" class="page" hidden>
+          <h2>Stake</h2>
+          <p class="hint">Stake locks ECO in the contract. Only locked coins count. Unstake returns them to the balance you can send.</p>
+          <label>Amount<input id="stake-amount" inputmode="decimal" /></label>
+          <div class="actions">
+            <button id="stake" type="button">Stake</button>
+            <button id="unstake" class="ghost" type="button">Unstake</button>
+          </div>
+        </section>
+        <section id="page-settings" class="page" hidden>
+          <h2>Settings</h2>
+          <label>Network address<input id="setting-rpc" spellcheck="false" /></label>
+          <label>ECO contract<input id="setting-contract" spellcheck="false" /></label>
+          <div class="actions">
+            <button id="save-settings" type="button">Save</button>
+            <button id="lock" class="ghost" type="button">Lock wallet</button>
+          </div>
+        </section>
+        <footer>
+          <span id="connection">Disconnected</span>
+          <span id="status"></span>
+        </footer>
+      </div>
+    </div>
+    <script src="renderer.js"></script>
+  </body>
+</html>

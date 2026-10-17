@@ -3,16 +3,33 @@
   "version": "1.0.0",
   "private": true,
   "description": "ERC-20 with a 1000000 ECO cap. New coins are minted only from a signed record at 1000 grams per ECO.",
+  "main": "wallet/main.js",
   "scripts": {
     "test": "hardhat test",
-    "compile": "hardhat compile"
+    "compile": "hardhat compile",
+    "node": "hardhat node",
+    "wallet": "electron .",
+    "wallet:install": "electron-builder --win nsis"
   },
   "dependencies": {
     "@openzeppelin/contracts": "5.7.0",
-    "dotenv": "^18.0.5"
+    "dotenv": "^18.0.5",
+    "ethers": "^6.15.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",
+    "electron": "^37.3.1",
+    "electron-builder": "^26.0.12",
     "hardhat": "^2.29.1"
+  },
+  "build": {
+    "appId": "eco.wallet",
+    "productName": "ECO Wallet",
+    "directories": { "output": "dist" },
+    "files": ["wallet/**/*", "package.json", "node_modules/**/*"],
+    "win": { "target": ["nsis"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "electronDownload": { "mirror": "https://npmmirror.com/mirrors/electron/" }
   }
 }

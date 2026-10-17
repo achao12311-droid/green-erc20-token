@@ -36,6 +36,22 @@ A normal `transfer` or `transferFrom` into the token contract reverts with `Dire
 
 `unstake(amount)` returns that many to your transferable balance.
 
+## Wallet
+
+ECO Wallet is a desktop program. The window has the same layout as the Monero desktop wallet: a side menu, overview, send, receive, transactions, and settings. The mining page is a Stake page. Stake locks ECO in the contract. Unstake returns it. That lock does not add blocks to Ethereum.
+
+```bash
+npm run wallet
+```
+
+To build a Windows installer:
+
+```bash
+npm run wallet:install
+```
+
+The installer is written to `dist/`. On first open, create a wallet and write down the 12 words. In Settings, set the network address and the ECO contract address.
+
 ## Run the tests
 
 ```bash
