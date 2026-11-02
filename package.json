@@ -2,10 +2,12 @@
   "name": "green-erc20-token",
   "version": "1.0.0",
   "private": true,
-  "description": "ERC-20 with a 1000000 ECO cap. New coins are minted only from a signed record at 1000 grams per ECO.",
+  "description": "Capped ECO token. New coins are minted only from a signed submission attestation.",
   "main": "wallet/main.js",
   "scripts": {
     "test": "hardhat test",
+    "test:backend": "npm test --prefix backend",
+    "test:ai": "python -m unittest discover -s ai/tests -v",
     "compile": "hardhat compile",
     "node": "hardhat node",
     "wallet": "electron .",

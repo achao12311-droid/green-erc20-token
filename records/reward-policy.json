@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "conversionConfirmed": false,
+  "weiPerPoint": null,
+  "note": "Eco Points are an internal accounting unit. They are not a measurement of carbon, waste, or environmental impact. The ECO conversion is not confirmed.",
+  "points": {
+    "PICK_UP_LITTER": 50,
+    "RECYCLING": 30,
+    "PARK_CLEANUP": 100,
+    "BEACH_CLEANUP": 150,
+    "TREE_PLANTING": 200,
+    "ENVIRONMENTAL_EVENT": 300
+  }
+}

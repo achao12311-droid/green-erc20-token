@@ -6,9 +6,14 @@ const { Wallet, JsonRpcProvider, Contract, formatUnits, parseUnits, isAddress } 
 
 const ABI = [
   "function balanceOf(address) view returns (uint256)",
-  "function staked(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
   "function transfer(address to, uint256 amount) returns (bool)",
+];
+
+const STAKING_ABI = [
+  "function staked(address) view returns (uint256)",
   "function stake(uint256 amount)",
   "function unstake(uint256 amount)",
 ];
@@ -37,6 +42,7 @@ function settings() {
   return readJson(fileInUserData("settings.json"), {
     rpc: "http://127.0.0.1:8545",
     contract: "",
+    staking: "",
   });
 }
 
@@ -55,7 +61,11 @@ async function connectUnlocked() {
     current.contract && isAddress(current.contract)
       ? new Contract(current.contract, ABI, unlocked)
       : null;
-  return { provider, contract, current };
+  const staking =
+    current.staking && isAddress(current.staking)
+      ? new Contract(current.staking, STAKING_ABI, unlocked)
+      : null;
+  return { provider, contract, staking, current };
 }
 
 function fail(error) {
@@ -130,12 +140,16 @@ ipcMain.handle("settings:set", (_event, next) => {
   if (next.contract && !isAddress(next.contract)) {
     throw new Error("Enter a valid contract address.");
   }
+  if (next.staking && !isAddress(next.staking)) {
+    throw new Error("Enter a valid staking contract.");
+  }
   if (!next.rpc || !next.rpc.trim()) {
     throw new Error("Enter the network address.");
   }
   writeJson(fileInUserData("settings.json"), {
     rpc: next.rpc.trim(),
     contract: (next.contract || "").trim(),
+    staking: (next.staking || "").trim(),
   });
   return settings();
 });
@@ -153,14 +167,16 @@ ipcMain.handle("wallet:qr", async () => {
 
 ipcMain.handle("chain:refresh", async () => {
   try {
-    const { provider, contract } = await connectUnlocked();
+    const { provider, contract, staking } = await connectUnlocked();
     const block = await provider.getBlockNumber();
     let available = "0";
     let staked = "0";
     if (contract) {
       const decimals = Number(await contract.decimals());
       available = formatUnits(await contract.balanceOf(unlocked.address), decimals);
-      staked = formatUnits(await contract.staked(unlocked.address), decimals);
+      if (staking) {
+        staked = formatUnits(await staking.staked(unlocked.address), decimals);
+      }
     }
     return {
       address: unlocked.address,
@@ -196,17 +212,40 @@ ipcMain.handle("tx:transfer", async (_event, { to, amount }) => {
   }
 });
 
-ipcMain.handle("tx:stake", async (_event, amount) => {
+async function stakingAmount(amountText) {
+  const { contract, staking } = await connectUnlocked();
+  if (!contract || !staking) throw new Error("Set the ECO token and staking contract in Settings.");
+  const decimals = Number(await contract.decimals());
+  const amount = parseUnits(String(amountText).trim(), decimals);
+  if (amount <= 0n) throw new Error("Enter an amount greater than 0.");
+  return { contract, staking, amount };
+}
+
+ipcMain.handle("tx:stake", async (_event, amountText) => {
   try {
-    return await sendToken("stake", amount);
+    const { contract, staking, amount } = await stakingAmount(amountText);
+    const spender = await staking.getAddress();
+    const allowance = await contract.allowance(unlocked.address, spender);
+    if (allowance < amount) {
+      const approval = await contract.approve(spender, amount);
+      await approval.wait();
+    }
+    const tx = await staking.stake(amount);
+    const receipt = await tx.wait();
+    remember({ kind: "stake", amount: String(amountText).trim(), to: spender, hash: receipt.hash });
+    return receipt.hash;
   } catch (error) {
     fail(error);
   }
 });
 
-ipcMain.handle("tx:unstake", async (_event, amount) => {
+ipcMain.handle("tx:unstake", async (_event, amountText) => {
   try {
-    return await sendToken("unstake", amount);
+    const { staking, amount } = await stakingAmount(amountText);
+    const tx = await staking.unstake(amount);
+    const receipt = await tx.wait();
+    remember({ kind: "unstake", amount: String(amountText).trim(), to: "", hash: receipt.hash });
+    return receipt.hash;
   } catch (error) {
     fail(error);
   }

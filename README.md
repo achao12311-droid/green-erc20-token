@@ -1,73 +1,48 @@
-# EcoToken
+# Green Eco Token（ECO）
 
-## Introduction
+ECO 是上限 1,000,000 枚的 ERC-20。新的幣只能在提交通過審核，且證明人對該筆提交簽名之後鑄出。Eco Points 是內部分數，不是碳排或垃圾重量。點數換成 ECO 的比率尚未確認，所以後端現在不會準備鑄幣。
 
-EcoToken (ECO) is an ERC-20 you can send, receive, and stake. Supply is capped at 1,000,000 ECO. New coins are minted only when the attester signs a record of measured grams: 1,000 grams mint 1 ECO. The caller does not choose the amount. The same record cannot be used twice. Transfers cannot be paused, so the owner cannot freeze a balance. The attester changes only after `transferOwnership` and `acceptOwnership`.
+質押只是把 ECO 鎖在應用合約裡，之後原數取回。它不是以太坊驗證者質押，也沒有利息。
 
-繁體中文說明在 [README.zh-TW.md](README.zh-TW.md)。
+詳細說明：
 
-## Published record
+- [架構](docs/ARCHITECTURE.md)
+- [代幣規則](docs/TOKENOMICS.md)
+- [API](docs/API.md)
+- [資料庫](docs/DATABASE.md)
+- [模型驗證](docs/AI_VERIFICATION.md)
+- [安全](docs/SECURITY.md)
+- [部署](docs/DEPLOYMENT.md)
+- [初始審查](docs/INITIAL_AUDIT.md)
+- [進度](docs/DEVELOPMENT_PROGRESS.md)
 
-The measurement for action 1 is in [records/action-1.csv](records/action-1.csv).
-
-| actionId | grams | ECO minted |
-| --- | --- | --- |
-| 1 | 5 | 0.005 |
-
-`records/action-1.csv` is the record. `records/action-1-method.txt` says how the grams were calculated: one A4 sheet at 80 grams per square metre is 4.9896 grams, stored as 5 whole grams. The test `mints the published gram record` signs that row and checks that the contract mints 0.005 ECO. This computer has no scale, so this is a paper-size calculation, not a scale reading.
-
-## Send and receive
-
-`transfer(to, amount)` sends your ECO to someone else.
-
-To let someone else pull ECO, call `approve(spender, amount)`. They then call `transferFrom(you, recipient, amount)`. A signature approval (`permit`) is also available; a normal `approve` is enough.
-
-## Signed mint
-
-`mintWithAttestation(to, actionId, grams, nonce, deadline, recordHash, signature)` mints to `to`.
-
-The attester signs EIP-712 typed data, type `Mint(address to,uint256 actionId,uint256 grams,uint256 nonce,uint256 deadline,bytes32 recordHash)`, for the EcoToken domain on this chain. A wallet shows those fields before signing. `recordHash` is `keccak256` of the measurement note, so the grams stay tied to that note. The contract stores the hash in `recordHashes(actionId)`. The signature is tied to this contract and chain id, and it is rejected after `deadline`. The signer must be `attester()`, which is the current owner. A mint that would pass `MAX_SUPPLY` reverts with `MaxSupplyExceeded`. A mint to the token contract itself reverts with `MintToContract`.
-
-A normal `transfer` or `transferFrom` into the token contract reverts with `DirectTransferToContract`. Those coins would not be recorded as staked, so only `stake` can lock ECO there. The supply minted at deploy must be below 1,000,000 ECO, so a signed record can still mint afterward.
-
-## Stake
-
-`stake(amount)` locks your ECO in the contract. Locked tokens are not in your transferable balance.
-
-`unstake(amount)` returns that many to your transferable balance.
-
-## Wallet
-
-ECO Wallet is a desktop program. The window has the same layout as the Monero desktop wallet: a side menu, overview, send, receive, transactions, and settings. The mining page is a Stake page. Stake locks ECO in the contract. Unstake returns it. That lock does not add blocks to Ethereum.
+## 本機
 
 ```bash
+npm install
+npx hardhat test
+npm install --prefix backend
+npm test --prefix backend
+npm start --prefix backend
+python -m unittest discover -s ai/tests -v
+npm install --prefix website
+npm run dev --prefix website
 npm run wallet
 ```
 
-To build a Windows installer:
+桌面錢包的安裝檔：
 
 ```bash
 npm run wallet:install
 ```
 
-The installer is written to `dist/`. On first open, create a wallet and write down the 12 words. In Settings, set the network address and the ECO contract address.
+設定頁要分別填代幣合約與質押合約。舊的 Sepolia 合約 `0x444696e8926BBfce3B04B288D7983F286EC8B814` 使用已廢止的克數規則，不能再當成這個版本。
 
-## Run the tests
+`.env` 不要提交。沒有得到明確指示時，不要執行 Sepolia 部署，也不要部署到主網。
 
-```bash
-cd green-erc20-token
-npm install
-npx hardhat test
-```
+## 尚未完成
 
-The tests sign the published record locally. They do not deploy to a live network.
-
-## Sepolia
-
-This repository does not include a private key. To deploy, copy `.env.example` to `.env`, set `SEPOLIA_RPC_URL` and `PRIVATE_KEY`, then run:
-
-```bash
-npx hardhat run scripts/deploy.js --network sepolia
-```
-
-No Sepolia address is listed here yet, because those two values were not set.
+- PostgreSQL 尚未接上，API 使用記憶體。
+- 影片物件儲存、工作佇列與模型權重尚未設定。
+- Chainlink VRF 與 CS2 皮膚發放都沒有實作。
+- 點數與 ECO 的換算尚未確認。

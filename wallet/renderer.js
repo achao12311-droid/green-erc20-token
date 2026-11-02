@@ -72,6 +72,7 @@ async function loadSettings() {
   const current = await window.eco.settings();
   document.querySelector("#setting-rpc").value = current.rpc;
   document.querySelector("#setting-contract").value = current.contract;
+  document.querySelector("#setting-staking").value = current.staking || "";
 }
 
 document.querySelector("#show-create").addEventListener("click", () => showGate("gate-create"));
@@ -161,6 +162,7 @@ document.querySelector("#save-settings").addEventListener("click", async () => {
     await window.eco.saveSettings({
       rpc: document.querySelector("#setting-rpc").value,
       contract: document.querySelector("#setting-contract").value,
+      staking: document.querySelector("#setting-staking").value,
     });
     await refreshAll();
     document.querySelector("#status").textContent = "Settings saved.";

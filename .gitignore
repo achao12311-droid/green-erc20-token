@@ -5,3 +5,8 @@ typechain-types/
 coverage/
 .env
 dist/
+backend/node_modules/
+website/node_modules/
+website/.next/
+ai/**/__pycache__/
+ai/.venv/

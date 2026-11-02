@@ -1,3 +1,5 @@
+RETIRED. This note is historical only. Grams are not converted into ECO. See records/reward-policy.json.
+
 Action 1 is one sheet of ordinary A4 office paper.
 
 The sheet was not placed on a scale. This computer has no scale, so the grams are calculated from the paper size and the usual office-paper weight.

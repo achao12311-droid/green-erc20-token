@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SubmissionStatus {
+  DRAFT
+  UPLOADED
+  PENDING_REVIEW
+  REJECTED
+  APPROVED
+}
+
+enum ReviewDecision {
+  APPROVED
+  REJECTED
+  PENDING
+}
+
+enum TransactionStatus {
+  PREPARED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+}
+
+model User {
+  id          String       @id @default(uuid()) @db.Uuid
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  wallets     Wallet[]
+  submissions Submission[]
+  reviews     Review[]
+}
+
+model Wallet {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  address   String
+  chainId   Int
+  createdAt DateTime @default(now())
+
+  @@unique([address, chainId])
+  @@index([userId])
+}
+
+model EcoAction {
+  id          String       @id @default(uuid()) @db.Uuid
+  code        String       @unique
+  title       String
+  active      Boolean      @default(true)
+  submissions Submission[]
+}
+
+model RewardPolicy {
+  id                   String   @id @default(uuid()) @db.Uuid
+  version              Int      @unique
+  conversionConfirmed  Boolean  @default(false)
+  weiPerPoint          String?
+  points               Json
+  createdAt            DateTime @default(now())
+  rewards              RewardRecord[]
+}
+
+model Submission {
+  id              String           @id @default(uuid()) @db.Uuid
+  userId          String           @db.Uuid
+  user            User             @relation(fields: [userId], references: [id])
+  actionId        String           @db.Uuid
+  action          EcoAction        @relation(fields: [actionId], references: [id])
+  description     String
+  status          SubmissionStatus @default(DRAFT)
+  idempotencyKey  String
+  chainId         Int
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  video           Video?
+  aiResults       AIResult[]
+  fraudResults    FraudResult[]
+  reviews         Review[]
+  reward          RewardRecord?
+
+  @@unique([userId, idempotencyKey])
+  @@index([status])
+}
+
+model Video {
+  id            String     @id @default(uuid()) @db.Uuid
+  submissionId  String     @unique @db.Uuid
+  submission    Submission @relation(fields: [submissionId], references: [id])
+  objectKey     String
+  contentType   String
+  byteSize      BigInt
+  sha256        String?
+  createdAt     DateTime   @default(now())
+}
+
+model AIResult {
+  id            String     @id @default(uuid()) @db.Uuid
+  submissionId  String     @db.Uuid
+  submission    Submission @relation(fields: [submissionId], references: [id])
+  modelName     String
+  modelVersion  String
+  output        Json
+  createdAt     DateTime   @default(now())
+
+  @@index([submissionId])
+}
+
+model FraudResult {
+  id            String     @id @default(uuid()) @db.Uuid
+  submissionId  String     @db.Uuid
+  submission    Submission @relation(fields: [submissionId], references: [id])
+  risk          String
+  evidence      Json
+  createdAt     DateTime   @default(now())
+}
+
+model Review {
+  id            String         @id @default(uuid()) @db.Uuid
+  submissionId  String         @db.Uuid
+  submission    Submission     @relation(fields: [submissionId], references: [id])
+  reviewerId    String         @db.Uuid
+  reviewer      User           @relation(fields: [reviewerId], references: [id])
+  decision      ReviewDecision
+  reason        String?
+  createdAt     DateTime       @default(now())
+}
+
+model RewardRecord {
+  id             String            @id @default(uuid()) @db.Uuid
+  submissionId   String            @unique @db.Uuid
+  submission     Submission        @relation(fields: [submissionId], references: [id])
+  policyId       String            @db.Uuid
+  policy         RewardPolicy      @relation(fields: [policyId], references: [id])
+  points         Int
+  amountWei      String?
+  status         String
+  transaction    BlockchainTransaction?
+  createdAt      DateTime          @default(now())
+}
+
+model BlockchainTransaction {
+  id           String       @id @default(uuid()) @db.Uuid
+  rewardId     String?      @unique @db.Uuid
+  reward       RewardRecord? @relation(fields: [rewardId], references: [id])
+  chainId      Int
+  txHash       String?
+  status       TransactionStatus @default(PREPARED)
+  createdAt    DateTime     @default(now())
+
+  @@index([chainId, status])
+}
+
+model Giveaway {
+  id          String          @id @default(uuid()) @db.Uuid
+  chainId     Int
+  campaignId  String
+  status      String
+  entries     GiveawayEntry[]
+  createdAt   DateTime        @default(now())
+
+  @@unique([chainId, campaignId])
+}
+
+model GiveawayEntry {
+  id          String   @id @default(uuid()) @db.Uuid
+  giveawayId  String   @db.Uuid
+  giveaway    Giveaway @relation(fields: [giveawayId], references: [id])
+  wallet      String
+  txHash      String?
+  createdAt   DateTime @default(now())
+
+  @@unique([giveawayId, wallet, txHash])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  actor     String
+  action    String
+  target    String
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([actor, createdAt])
+}
