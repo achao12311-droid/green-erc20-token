@@ -43,4 +43,6 @@
 
 抽獎路由在合約地址設定前回 `not_configured`。
 
-`POST /admin/reviews/:id` 只接受 `ADMIN_ADDRESSES` 裡的錢包。決定只能是 `approved` 或 `rejected`，並寫入稽核紀錄。`GET /admin/audit` 同樣受限。
+`POST /admin/reviews/:id` 只接受 `ADMIN_ADDRESSES` 裡的錢包。核准之前，提交必須屬於有效錢包、影片紀錄已完成、驗證已跑完，而且狀態是 `pending_review`。草稿不能核准。審核紀錄包含審核者、決定、原因與時間。`GET /admin/audit` 同樣受限。
+
+`POST /rewards/claim/:id` 對同一筆提交只建立一筆待簽名紀錄。預設政策的換算未確認時不會建立。這筆紀錄沒有簽名，也沒有鑄幣。

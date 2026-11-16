@@ -9,8 +9,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IRandomnessSource, IRewardRandomReceiver} from "../interfaces/IRandomnessSource.sol";
 
 /// @title EcoRewardManager
-/// @notice Locks ECO as a giveaway entry and records winners.
-/// @dev The ECO is returned after the campaign. CS2 skin delivery is off-chain and is not performed here.
+/// @notice Sells ECO tickets for a giveaway and records winners.
+/// @dev The ticket price is spent when the draw completes. Cancellation refunds the ticket.
+///      CS2 skin delivery is off-chain and is not performed here.
 ///      Winner selection is only as fair as the configured randomness source. The test source is not VRF.
 contract EcoRewardManager is Ownable2Step, ReentrancyGuard, IRewardRandomReceiver {
     using SafeERC20 for IERC20;
@@ -45,6 +46,7 @@ contract EcoRewardManager is Ownable2Step, ReentrancyGuard, IRewardRandomReceive
     mapping(uint256 campaignId => address[] winners) private _winners;
     mapping(uint256 campaignId => mapping(address account => bool won)) public isWinner;
     mapping(uint256 requestId => uint256 campaignId) public campaignOfRequest;
+    mapping(uint256 requestId => address source) public requestSource;
 
     error ZeroAddress();
     error InvalidWindow();
@@ -58,12 +60,14 @@ contract EcoRewardManager is Ownable2Step, ReentrancyGuard, IRewardRandomReceive
     error UnknownRequest(uint256 requestId);
     error AlreadyDrawn();
     error UnknownCampaign(uint256 campaignId);
+    error DuplicateRequest(uint256 requestId);
 
     event CampaignCreated(uint256 indexed campaignId, uint64 start, uint64 end, uint256 lockAmount);
     event Entered(uint256 indexed campaignId, address indexed account, uint256 amount);
     event CampaignClosed(uint256 indexed campaignId, uint256 requestId);
     event WinnersSelected(uint256 indexed campaignId, address[] winners);
     event Withdrawn(uint256 indexed campaignId, address indexed account, uint256 amount);
+    event TicketsCollected(uint256 indexed campaignId, address indexed to, uint256 amount);
     event CampaignCancelled(uint256 indexed campaignId);
     event RandomnessSourceUpdated(address indexed source);
 
@@ -123,14 +127,20 @@ contract EcoRewardManager is Ownable2Step, ReentrancyGuard, IRewardRandomReceive
         if (campaign.lockAmount == 0) revert UnknownCampaign(campaignId);
         if (campaign.status != Status.Active || block.timestamp < campaign.end) revert NotCloseable();
         campaign.status = Status.Closed;
-        uint256 requestId = randomnessSource.request(campaignId);
+        IRandomnessSource source = randomnessSource;
+        uint256 requestId = source.request(campaignId);
+        if (requestId == 0 || requestSource[requestId] != address(0)) revert DuplicateRequest(requestId);
         campaign.randomRequestId = requestId;
         campaignOfRequest[requestId] = campaignId;
+        requestSource[requestId] = address(source);
         emit CampaignClosed(campaignId, requestId);
     }
 
+    /// @dev The callback must come from the source stored for this request.
+    ///      Replacing randomnessSource does not let the new source answer an old request,
+    ///      and it does not stop the original source from completing that request.
     function onRandomness(uint256 requestId, uint256 randomness) external {
-        if (msg.sender != address(randomnessSource)) revert InvalidRandomnessSource();
+        if (msg.sender != requestSource[requestId]) revert InvalidRandomnessSource();
         uint256 campaignId = campaignOfRequest[requestId];
         if (campaignId == 0) revert UnknownRequest(requestId);
         Campaign storage campaign = campaigns[campaignId];
@@ -149,15 +159,26 @@ contract EcoRewardManager is Ownable2Step, ReentrancyGuard, IRewardRandomReceive
         emit CampaignCancelled(campaignId);
     }
 
+    /// @notice Returns a ticket only when the giveaway is cancelled.
     function withdraw(uint256 campaignId) external nonReentrant {
-        Status status = campaigns[campaignId].status;
-        if (status != Status.Completed && status != Status.Cancelled) revert NotWithdrawable();
+        if (campaigns[campaignId].status != Status.Cancelled) revert NotWithdrawable();
         uint256 amount = lockedOf[campaignId][msg.sender];
         if (amount == 0) revert ZeroAmount();
         lockedOf[campaignId][msg.sender] = 0;
         totalLocked[campaignId] -= amount;
         eco.safeTransfer(msg.sender, amount);
         emit Withdrawn(campaignId, msg.sender, amount);
+    }
+
+    /// @notice Sends spent ticket ECO to the owner after a completed draw.
+    function collectTickets(uint256 campaignId, address to) external onlyOwner nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        if (campaigns[campaignId].status != Status.Completed) revert NotWithdrawable();
+        uint256 amount = totalLocked[campaignId];
+        if (amount == 0) revert ZeroAmount();
+        totalLocked[campaignId] = 0;
+        eco.safeTransfer(to, amount);
+        emit TicketsCollected(campaignId, to, amount);
     }
 
     function entries(uint256 campaignId) external view returns (address[] memory) {

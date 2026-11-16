@@ -19,9 +19,10 @@ const links = [
 
 export function Shell({ title, children }: { title: string; children: React.ReactNode }) {
   const account = useAccount();
-  const { connect } = useConnect();
+  const { connect, connectors, error } = useConnect();
   const { disconnect } = useDisconnect();
   const wrongChain = account.isConnected && account.chainId !== sepolia.id;
+  const eco = connectors.find((connector) => connector.id === "ecoWallet");
 
   return (
     <div className="mx-auto grid min-h-screen max-w-6xl grid-cols-1 gap-8 px-6 py-8 md:grid-cols-[220px_1fr]">
@@ -44,11 +45,17 @@ export function Shell({ title, children }: { title: string; children: React.Reac
               {account.address?.slice(0, 6)}…{account.address?.slice(-4)}
             </button>
           ) : (
-            <button className="bg-leaf px-3 py-2 text-sm" onClick={() => connect({ connector: injected() })} type="button">
-              連接錢包
-            </button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button className="bg-leaf px-3 py-2 text-sm" disabled={!eco} onClick={() => eco && connect({ connector: eco })} type="button">
+                ECO Wallet
+              </button>
+              <button className="border border-sap/40 px-3 py-2 text-sm" onClick={() => connect({ connector: injected() })} type="button">
+                瀏覽器錢包
+              </button>
+            </div>
           )}
         </div>
+        {error ? <p className="mb-4 border border-amber-300/40 p-3 text-sm">{error.message}</p> : null}
         {wrongChain ? <p className="mb-4 border border-amber-300/40 p-3 text-sm">請切換到 Sepolia（鏈 ID 11155111）。這個網站不會送出其他網路的交易。</p> : null}
         {children}
       </main>

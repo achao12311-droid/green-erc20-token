@@ -30,7 +30,11 @@ def verify(body: VerifyRequest):
             "scene": scene_classification(),
             "forensics": forensics(),
         },
-        "duplicateDetection": {"sha256": body.videoSha256, "perceptual": perceptual_status()},
+        "duplicateDetection": {
+            "sha256": body.videoSha256,
+            "sha256Scope": "identical_bytes_only",
+            "perceptual": perceptual_status(),
+        },
         "fraudRisk": decision["fraudRisk"],
         "decision": decision["decision"],
         "reason": decision["reason"],

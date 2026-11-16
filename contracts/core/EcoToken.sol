@@ -48,10 +48,18 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step, ReentrancyGuard {
         address indexed attester
     );
 
-    constructor(uint256 initialSupply) ERC20("Green Eco Token", "ECO") ERC20Permit("Green Eco Token") Ownable(msg.sender) {
+    /// @param initialAttester Account allowed to sign mints. This is not implied by ownership.
+    ///        The zero address configures no attester. Passing the owner is an explicit choice.
+    constructor(uint256 initialSupply, address initialAttester)
+        ERC20("Green Eco Token", "ECO")
+        ERC20Permit("Green Eco Token")
+        Ownable(msg.sender)
+    {
         if (initialSupply >= MAX_SUPPLY) revert MaxSupplyExceeded(initialSupply, MAX_SUPPLY);
-        isAttester[msg.sender] = true;
-        emit AttesterUpdated(msg.sender, true);
+        if (initialAttester != address(0)) {
+            isAttester[initialAttester] = true;
+            emit AttesterUpdated(initialAttester, true);
+        }
         if (initialSupply > 0) {
             _mint(msg.sender, initialSupply);
         }
@@ -115,6 +123,17 @@ contract EcoToken is ERC20, ERC20Permit, Ownable2Step, ReentrancyGuard {
         recordHashes[submissionId] = recordHash;
         _mint(to, rewardAmount);
         emit Minted(submissionId, to, rewardAmount, recordHash, signer);
+    }
+
+    /// @dev Accepting ownership removes the previous owner's mint permission.
+    ///      An attester who is not that owner keeps the permission until revoked.
+    function _transferOwnership(address newOwner) internal override {
+        address previousOwner = owner();
+        super._transferOwnership(newOwner);
+        if (previousOwner != address(0) && isAttester[previousOwner]) {
+            isAttester[previousOwner] = false;
+            emit AttesterUpdated(previousOwner, false);
+        }
     }
 
     function _update(address from, address to, uint256 value) internal override {

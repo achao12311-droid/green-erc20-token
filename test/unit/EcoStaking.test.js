@@ -4,7 +4,7 @@ const { ethers } = require("hardhat");
 describe("EcoStaking", function () {
   async function deploy() {
     const [deployer, alice] = await ethers.getSigners();
-    const token = await ethers.deployContract("EcoToken", [ethers.parseEther("1000")]);
+    const token = await ethers.deployContract("EcoToken", [ethers.parseEther("1000"), deployer.address]);
     const staking = await ethers.deployContract("EcoStaking", [await token.getAddress()]);
     await staking.waitForDeployment();
     return { token, staking, deployer, alice };

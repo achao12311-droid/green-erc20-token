@@ -9,9 +9,14 @@ async function main() {
     throw new Error("Sepolia network config does not match chain id 11155111.");
   }
 
+  const [deployer] = await ethers.getSigners();
   const wholeTokens = (process.env.INITIAL_SUPPLY || "0").replaceAll("_", "").trim();
   const initialSupply = ethers.parseEther(wholeTokens);
-  const token = await ethers.deployContract("EcoToken", [initialSupply]);
+  const attester = (process.env.ATTESTER_ADDRESS || deployer.address).trim();
+  if (!ethers.isAddress(attester)) {
+    throw new Error("ATTESTER_ADDRESS must be an address. Ownership does not grant minting.");
+  }
+  const token = await ethers.deployContract("EcoToken", [initialSupply, attester]);
   await token.waitForDeployment();
   const staking = await ethers.deployContract("EcoStaking", [await token.getAddress()]);
   await staking.waitForDeployment();
@@ -24,6 +29,8 @@ async function main() {
   await rewards.waitForDeployment();
 
   console.log("Network:", network.name, chainId.toString());
+  console.log("Owner:", deployer.address);
+  console.log("Initial attester:", attester);
   console.log("EcoToken:", await token.getAddress());
   console.log("EcoStaking:", await staking.getAddress());
   console.log("UnconfiguredRandomness:", await randomness.getAddress());

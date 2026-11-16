@@ -8,7 +8,7 @@ const MAX_SUPPLY = ethers.parseEther("1000000");
 describe("mint security", function () {
   async function deploy() {
     const [deployer, alice] = await ethers.getSigners();
-    const token = await ethers.deployContract("EcoToken", [0]);
+    const token = await ethers.deployContract("EcoToken", [0, deployer.address]);
     await token.waitForDeployment();
     return { token, deployer, alice };
   }

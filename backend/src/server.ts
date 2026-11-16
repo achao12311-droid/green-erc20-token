@@ -1,35 +1,55 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { SiweMessage } from "siwe";
 import { z } from "zod";
+import { verifyVideoFile, videoDirectory, type ModelVerdict } from "./ai/verifyVideo.ts";
 import { NonceStore } from "./auth/nonce.ts";
+import { RewardLedger } from "./rewards/ledger.ts";
 import { DEVELOPMENT_POLICY, ACTIONS, pointsFor, rewardWei, type RewardPolicy } from "./rewards/policy.ts";
 import { MemoryStore, type Submission } from "./submissions/memoryStore.ts";
+import { reviewBlockers } from "./submissions/review.ts";
 
 type Session = { address: string; expiresAt: number };
-type Audit = { id: string; actor: string; action: string; target: string; at: string };
+type Audit = { id: string; actor: string; action: string; target: string; reason: string | null; at: string };
+
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const videoBody = z.object({
+  contentType: z.enum(["video/mp4", "video/webm"]),
+  byteSize: z.number().int().positive().max(MAX_VIDEO_BYTES),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
 
 const submissionBody = z.object({
   action: z.enum(ACTIONS),
   description: z.string().trim().min(1).max(2000),
 });
 
-export async function buildServer(options?: { store?: MemoryStore; nonces?: NonceStore; policy?: RewardPolicy }) {
+export async function buildServer(options?: {
+  store?: MemoryStore;
+  nonces?: NonceStore;
+  policy?: RewardPolicy;
+  verifier?: (input: { filePath: string; action: string; priors: string[] }) => Promise<ModelVerdict>;
+}) {
   const store = options?.store ?? new MemoryStore();
   const nonces = options?.nonces ?? new NonceStore();
   const policy = options?.policy ?? DEVELOPMENT_POLICY;
   const sessions = new Map<string, Session>();
   const audits: Audit[] = [];
-  const rewards = new Map<string, { id: string; submissionId: string; wallet: string; points: number; wei: string | null; status: string }>();
+  const rewards = new RewardLedger();
   const secret = process.env.SESSION_SECRET || "dev-only-change-me";
   if (process.env.NODE_ENV === "production" && secret === "dev-only-change-me") {
     throw new Error("SESSION_SECRET is required in production");
   }
 
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: MAX_VIDEO_BYTES });
+  app.addContentTypeParser(/^video\/(mp4|webm)$/i, { parseAs: "buffer" }, (_request, body, done) => {
+    done(null, body);
+  });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) {
       return reply.code(400).send({ error: "invalid_body" });
@@ -151,10 +171,31 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
   app.post("/api/v1/submissions/:id/video-upload", async (request, reply) => {
     const user = requireUser(request, reply);
     if (!user) return;
-    if (!process.env.S3_BUCKET) {
-      return reply.code(503).send({ error: "storage_not_configured" });
+    const found = owned(store, (request.params as { id: string }).id, user.address);
+    if (!found) return reply.code(404).send({ error: "not_found" });
+    const contentType = String(request.headers["content-type"] || "");
+    if (contentType.startsWith("video/")) {
+      const bytes = request.body as Buffer;
+      if (!Buffer.isBuffer(bytes) || bytes.length === 0) return reply.code(400).send({ error: "empty_video" });
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      mkdirSync(videoDirectory, { recursive: true });
+      const extension = contentType.includes("webm") ? "webm" : "mp4";
+      const stored = path.join(videoDirectory, found.id + "." + extension);
+      writeFileSync(stored, bytes);
+      store.videoFiles.set(found.id, stored);
+      found.video = { contentType: contentType.split(";")[0], size: bytes.length, sha256, complete: true };
+      if (found.status === "draft") found.status = "uploaded";
+      return { storage: "local_file", bytesStored: true, signedUrl: null, submission: found };
     }
-    return reply.code(501).send({ error: "signed_upload_not_configured" });
+    const body = videoBody.parse(request.body);
+    found.video = { contentType: body.contentType, size: body.byteSize, sha256: body.sha256, complete: true };
+    if (found.status === "draft") found.status = "uploaded";
+    return {
+      storage: "metadata_only",
+      bytesStored: false,
+      signedUrl: null,
+      submission: found,
+    };
   });
 
   app.post("/api/v1/submissions/:id/complete", async (request, reply) => {
@@ -162,8 +203,7 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
     if (!user) return;
     const found = owned(store, (request.params as { id: string }).id, user.address);
     if (!found) return reply.code(404).send({ error: "not_found" });
-    if (!found.video) return reply.code(409).send({ error: "video_missing" });
-    found.status = "pending_review";
+    if (!found.video?.complete) return reply.code(409).send({ error: "video_missing" });
     return found;
   });
 
@@ -172,16 +212,60 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
     if (!user) return;
     const found = owned(store, (request.params as { id: string }).id, user.address);
     if (!found) return reply.code(404).send({ error: "not_found" });
-    found.status = "pending_review";
-    return {
-      submissionId: found.id,
-      predictedAction: null,
-      models: { action: { status: "not_configured" } },
-      duplicateDetection: { status: process.env.AI_SERVICE_URL ? "deferred_to_ai_service" : "not_run" },
-      fraudRisk: "unknown",
-      decision: "pending_review",
-      reason: "ai_not_configured",
-    };
+    if (!found.video?.complete) return reply.code(409).send({ error: "video_missing" });
+    if (store.hasExactSha256Duplicate(found)) {
+      return reply.send(applyVerdict(store, found, {
+        decision: "rejected",
+        reason: "exact_duplicate",
+        predictedAction: null,
+        modelsConfigured: false,
+        exactDuplicate: true,
+        nearDuplicate: false,
+        perceptual: "not_configured",
+        observedLabels: [],
+        frameHashes: [],
+        model: null,
+      }));
+    }
+    const filePath = store.videoFiles.get(found.id);
+    if (!filePath) {
+      return reply.send(applyVerdict(store, found, {
+        decision: "rejected",
+        reason: "video_bytes_missing",
+        predictedAction: null,
+        modelsConfigured: false,
+        exactDuplicate: false,
+        nearDuplicate: false,
+        perceptual: "not_configured",
+        observedLabels: [],
+        frameHashes: [],
+        model: null,
+      }));
+    }
+    const priors = [...store.frameHashes.entries()].filter(([id]) => id !== found.id).flatMap(([, hashes]) => hashes);
+    let verdict: ModelVerdict;
+    try {
+      verdict = await (options?.verifier ?? ((input) => verifyVideoFile(input.filePath, input.action, input.priors)))({
+        filePath,
+        action: found.action,
+        priors,
+      });
+    } catch {
+      verdict = {
+        decision: "rejected",
+        reason: "model_failed",
+        predictedAction: null,
+        modelsConfigured: false,
+        exactDuplicate: false,
+        nearDuplicate: false,
+        perceptual: "average_hash",
+        observedLabels: [],
+        frameHashes: [],
+        model: null,
+      };
+    }
+    if (verdict.decision !== "approved") verdict.decision = "rejected";
+    return reply.send(applyVerdict(store, found, verdict));
   });
 
   app.get("/api/v1/ai/results/:id", async (request, reply) => {
@@ -189,7 +273,13 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
     if (!user) return;
     const found = owned(store, (request.params as { id: string }).id, user.address);
     if (!found) return reply.code(404).send({ error: "not_found" });
-    return { submissionId: found.id, decision: found.status, fraudRisk: "unknown" };
+    return {
+      submissionId: found.id,
+      decision: found.verification?.decision ?? found.status,
+      reason: found.verification?.reason ?? null,
+      fraudRisk: found.verification?.exactDuplicate ? "high" : "unknown",
+      modelsConfigured: false,
+    };
   });
 
   app.post("/api/v1/ai/retry/:id", async (request, reply) => {
@@ -201,20 +291,21 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
   app.get("/api/v1/rewards/balance", async (request, reply) => {
     const user = requireUser(request, reply);
     if (!user) return;
-    const mine = [...rewards.values()].filter((row) => row.wallet === user.address);
-    return { points: mine.reduce((sum, row) => sum + row.points, 0), confirmedEcoWei: null, conversionConfirmed: policy.conversionConfirmed };
+    const mine = rewards.listFor(user.address);
+    const confirmedEcoWei = mine.reduce((sum, row) => sum + BigInt(row.wei), 0n).toString();
+    return { points: mine.reduce((sum, row) => sum + row.points, 0), confirmedEcoWei: mine.length ? confirmedEcoWei : null, conversionConfirmed: policy.conversionConfirmed };
   });
 
   app.get("/api/v1/rewards/pending", async (request, reply) => {
     const user = requireUser(request, reply);
     if (!user) return;
-    return [...rewards.values()].filter((row) => row.wallet === user.address && row.status !== "attested");
+    return rewards.listFor(user.address);
   });
 
   app.get("/api/v1/rewards/history", async (request, reply) => {
     const user = requireUser(request, reply);
     if (!user) return;
-    return [...rewards.values()].filter((row) => row.wallet === user.address);
+    return rewards.listFor(user.address);
   });
 
   app.post("/api/v1/rewards/claim/:id", async (request, reply) => {
@@ -225,15 +316,23 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
     if (found.status !== "approved") return reply.code(409).send({ error: "not_approved" });
     const reward = rewardWei(policy, found.action);
     if (!reward.ok) return reply.code(409).send({ error: reward.reason });
-    const record = { id: randomUUID(), submissionId: found.id, wallet: user.address, points: pointsFor(policy, found.action), wei: reward.wei, status: "ready_for_attestation" };
-    rewards.set(record.id, record);
-    return record;
+    const authorized = rewards.authorize({
+      id: randomUUID(),
+      submissionId: found.id,
+      wallet: user.address,
+      points: pointsFor(policy, found.action),
+      wei: reward.wei,
+      policyVersion: policy.version,
+      status: "ready_for_attestation",
+      signature: null,
+    });
+    return reply.code(authorized.created ? 201 : 200).send(authorized.record);
   });
 
   app.get("/api/v1/rewards/transaction/:id", async (request, reply) => {
     const user = requireUser(request, reply);
     if (!user) return;
-    const record = rewards.get((request.params as { id: string }).id);
+    const record = rewards.getById((request.params as { id: string }).id);
     if (!record || record.wallet !== user.address) return reply.code(404).send({ error: "not_found" });
     return record;
   });
@@ -252,9 +351,14 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
     const body = z.object({ decision: z.enum(["approved", "rejected"]), reason: z.string().max(1000).optional() }).parse(request.body);
     const found = store.get((request.params as { id: string }).id);
     if (!found) return reply.code(404).send({ error: "not_found" });
+    const blockers = reviewBlockers(found, body.decision);
+    if (blockers.length > 0) return reply.code(409).send({ error: "review_not_eligible", blockers });
+    const at = new Date().toISOString();
+    const review = { reviewer: user.address, decision: body.decision, reason: body.reason ?? null, at };
+    found.reviews.push(review);
     found.status = body.decision;
-    audits.push({ id: randomUUID(), actor: user.address, action: body.decision, target: found.id, at: new Date().toISOString() });
-    return { submission: found, reason: body.reason ?? null };
+    audits.push({ id: randomUUID(), actor: review.reviewer, action: review.decision, target: found.id, reason: review.reason, at });
+    return { submission: found, review };
   });
 
   app.get("/api/v1/admin/audit", async (request, reply) => {
@@ -266,6 +370,36 @@ export async function buildServer(options?: { store?: MemoryStore; nonces?: Nonc
   });
 
   return app;
+}
+
+function applyVerdict(store: MemoryStore, found: Submission, verdict: ModelVerdict) {
+  const at = new Date().toISOString();
+  found.verification = {
+    completed: true,
+    decision: verdict.decision,
+    reason: verdict.reason,
+    exactDuplicate: verdict.exactDuplicate,
+    nearDuplicate: verdict.nearDuplicate,
+    perceptual: verdict.perceptual,
+    modelsConfigured: verdict.modelsConfigured,
+    predictedAction: verdict.predictedAction,
+    at,
+  };
+  found.status = verdict.decision;
+  if (verdict.frameHashes.length > 0) store.frameHashes.set(found.id, verdict.frameHashes);
+  return {
+    submissionId: found.id,
+    predictedAction: verdict.predictedAction,
+    models: { action: { status: verdict.modelsConfigured ? "configured" : "not_configured", model: verdict.model } },
+    duplicateDetection: {
+      sha256: { exact: verdict.exactDuplicate, scope: "identical_bytes_only" },
+      perceptual: { status: verdict.perceptual },
+    },
+    observedLabels: verdict.observedLabels,
+    fraudRisk: verdict.exactDuplicate || verdict.nearDuplicate ? "high" : "unknown",
+    decision: verdict.decision,
+    reason: verdict.reason,
+  };
 }
 
 function owned(store: MemoryStore, id: string, wallet: string): Submission | undefined {

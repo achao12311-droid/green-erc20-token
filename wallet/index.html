@@ -21,13 +21,16 @@
           <button id="show-restore" class="text" type="button">Restore from saved words</button>
         </div>
         <form id="gate-create" hidden>
+          <p class="hint">This replaces the wallet already saved on this computer.</p>
           <label>Password<input id="create-password" type="password" /></label>
           <label>Repeat password<input id="create-password-2" type="password" /></label>
           <button type="submit">Create wallet</button>
+          <button id="create-back" class="text" type="button">Back</button>
         </form>
         <form id="gate-open" hidden>
           <label>Password<input id="open-password" type="password" /></label>
           <button type="submit">Open</button>
+          <button id="show-create-from-open" class="text" type="button">Create a new wallet</button>
         </form>
         <form id="gate-restore" hidden>
           <label>Saved words<textarea id="restore-phrase" rows="3"></textarea></label>
@@ -83,6 +86,7 @@
         </section>
         <section id="page-send" class="page" hidden>
           <h2>Send</h2>
+          <p class="hint">ECO can be sent to any wallet address. It cannot be sent to the token contract itself. The recipient needs no approval.</p>
           <label>Address<input id="send-to" spellcheck="false" /></label>
           <label>Amount<input id="send-amount" inputmode="decimal" /></label>
           <button id="send" type="button">Send</button>
@@ -95,6 +99,8 @@
               <p class="kicker">Your address</p>
               <p id="receive-address"></p>
               <button id="copy-address" type="button">Copy address</button>
+              <p class="hint">Anyone can send ECO to this address.</p>
+              <ul id="incoming"></ul>
             </div>
           </div>
         </section>
@@ -125,6 +131,17 @@
           <span id="connection">Disconnected</span>
           <span id="status"></span>
         </footer>
+      </div>
+    </div>
+    <div id="approval" hidden>
+      <div class="gate-card">
+        <p class="kicker" id="approval-origin"></p>
+        <h2 id="approval-title"></h2>
+        <p id="approval-detail"></p>
+        <div class="actions">
+          <button id="approval-allow" type="button">Allow</button>
+          <button id="approval-deny" class="ghost" type="button">Deny</button>
+        </div>
       </div>
     </div>
     <script src="renderer.js"></script>

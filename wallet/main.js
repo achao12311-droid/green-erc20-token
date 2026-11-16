@@ -3,6 +3,9 @@ const fs = require("fs");
 const path = require("path");
 const QRCode = require("qrcode");
 const { Wallet, JsonRpcProvider, Contract, formatUnits, parseUnits, isAddress } = require("ethers");
+const { createBridge } = require("./bridge");
+
+const DEFAULT_RPC = "https://ethereum-sepolia-rpc.publicnode.com";
 
 const ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -20,6 +23,10 @@ const STAKING_ABI = [
 
 let windowRef;
 let unlocked;
+let acceptsSites = false;
+let bridge;
+let pendingApproval;
+let pendingPrompt;
 
 function fileInUserData(name) {
   return path.join(app.getPath("userData"), name);
@@ -40,7 +47,7 @@ function writeJson(file, value) {
 
 function settings() {
   return readJson(fileInUserData("settings.json"), {
-    rpc: "http://127.0.0.1:8545",
+    rpc: DEFAULT_RPC,
     contract: "",
     staking: "",
   });
@@ -73,6 +80,48 @@ function fail(error) {
   throw new Error(message);
 }
 
+function finishApproval(id, allowed) {
+  if (!pendingApproval || (id !== undefined && pendingApproval.id !== id)) return;
+  const current = pendingApproval;
+  pendingApproval = null;
+  pendingPrompt = null;
+  current.resolve(Boolean(allowed));
+  if (windowRef && !windowRef.isDestroyed()) {
+    try {
+      windowRef.webContents.send("bridge:prompt", null);
+    } catch {
+      // The prompt overlay hides on the next load if the page is not ready.
+    }
+  }
+}
+
+function askApproval(prompt) {
+  if (pendingApproval) return Promise.reject(new Error("ECO Wallet is already waiting for another approval."));
+  return new Promise((resolve) => {
+    const id = Date.now();
+    pendingApproval = { id, resolve };
+    pendingPrompt = { id, ...prompt };
+    if (windowRef && !windowRef.isDestroyed()) {
+      if (windowRef.isMinimized()) windowRef.restore();
+      windowRef.show();
+      windowRef.focus();
+      try {
+        windowRef.webContents.send("bridge:prompt", pendingPrompt);
+      } catch {
+        // The page reads the pending prompt when it finishes loading.
+      }
+    }
+    setTimeout(() => finishApproval(id, false), 180000);
+  });
+}
+
+async function assertSepolia(provider) {
+  const network = await provider.getNetwork();
+  if (network.chainId !== 11155111n) {
+    throw new Error("This wallet only sends ECO on Sepolia. Change the network address in Settings.");
+  }
+}
+
 function createWindow() {
   windowRef = new BrowserWindow({
     width: 1100,
@@ -91,7 +140,10 @@ function createWindow() {
   windowRef.loadFile(path.join(__dirname, "index.html"));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  startBridge().catch((error) => console.error(error));
+});
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
@@ -132,6 +184,19 @@ ipcMain.handle("wallet:unlock", async (_event, password) => {
 
 ipcMain.handle("wallet:lock", () => {
   unlocked = undefined;
+  acceptsSites = false;
+  finishApproval(undefined, false);
+  if (bridge) bridge.disconnect();
+});
+
+ipcMain.handle("wallet:opened", () => {
+  acceptsSites = Boolean(unlocked);
+});
+
+ipcMain.handle("bridge:current", () => pendingPrompt || null);
+
+ipcMain.handle("bridge:decide", (_event, { id, allow }) => {
+  finishApproval(id, allow);
 });
 
 ipcMain.handle("settings:get", () => settings());
@@ -171,11 +236,23 @@ ipcMain.handle("chain:refresh", async () => {
     const block = await provider.getBlockNumber();
     let available = "0";
     let staked = "0";
+    let incoming = [];
     if (contract) {
       const decimals = Number(await contract.decimals());
       available = formatUnits(await contract.balanceOf(unlocked.address), decimals);
       if (staking) {
         staked = formatUnits(await staking.staked(unlocked.address), decimals);
+      }
+      try {
+        const fromBlock = Math.max(0, block - 4000);
+        const logs = await contract.queryFilter(contract.filters.Transfer(null, unlocked.address), fromBlock, block);
+        incoming = logs.slice(-8).reverse().map((log) => ({
+          from: log.args[0],
+          amount: formatUnits(log.args[1], decimals),
+          hash: log.transactionHash,
+        }));
+      } catch {
+        incoming = [];
       }
     }
     return {
@@ -183,6 +260,7 @@ ipcMain.handle("chain:refresh", async () => {
       block,
       available,
       staked,
+      incoming,
       contract: settings().contract,
       rpc: settings().rpc,
     };
@@ -192,7 +270,8 @@ ipcMain.handle("chain:refresh", async () => {
 });
 
 async function sendToken(method, amountText, to) {
-  const { contract } = await connectUnlocked();
+  const { provider, contract } = await connectUnlocked();
+  await assertSepolia(provider);
   if (!contract) throw new Error("Set the ECO contract address in Settings.");
   const decimals = Number(await contract.decimals());
   const amount = parseUnits(String(amountText).trim(), decimals);
@@ -213,7 +292,8 @@ ipcMain.handle("tx:transfer", async (_event, { to, amount }) => {
 });
 
 async function stakingAmount(amountText) {
-  const { contract, staking } = await connectUnlocked();
+  const { provider, contract, staking } = await connectUnlocked();
+  await assertSepolia(provider);
   if (!contract || !staking) throw new Error("Set the ECO token and staking contract in Settings.");
   const decimals = Number(await contract.decimals());
   const amount = parseUnits(String(amountText).trim(), decimals);
@@ -250,3 +330,55 @@ ipcMain.handle("tx:unstake", async (_event, amountText) => {
     fail(error);
   }
 });
+
+async function forwardRpc(method, params) {
+  const current = settings();
+  let response;
+  try {
+    response = await fetch(current.rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+  } catch {
+    throw new Error("ECO Wallet cannot reach the network in Settings.");
+  }
+  const body = await response.json();
+  if (body.error) throw new Error(body.error.message || "The network rejected the request.");
+  return body.result;
+}
+
+function startBridge() {
+  bridge = createBridge({
+    isUnlocked: () => acceptsSites && Boolean(unlocked),
+    getAddress: () => {
+      if (!unlocked) throw new Error("Unlock the wallet first.");
+      return unlocked.address;
+    },
+    approve: askApproval,
+    signMessage: async (message) => {
+      if (!unlocked) throw new Error("Unlock the wallet first.");
+      return unlocked.signMessage(message);
+    },
+    signTypedData: async (typed) => {
+      if (!unlocked) throw new Error("Unlock the wallet first.");
+      const types = { ...typed.types };
+      delete types.EIP712Domain;
+      return unlocked.signTypedData(typed.domain, types, typed.message);
+    },
+    sendTransaction: async (tx) => {
+      const { provider } = await connectUnlocked();
+      await assertSepolia(provider);
+      const sent = await unlocked.sendTransaction({
+        to: tx.to,
+        data: tx.data && tx.data !== "0x" ? tx.data : undefined,
+        value: tx.value ? BigInt(tx.value) : 0n,
+        chainId: 11155111n,
+      });
+      remember({ kind: "website", amount: "", to: tx.to || "", hash: sent.hash });
+      return sent.hash;
+    },
+    forward: forwardRpc,
+  });
+  return bridge.listen(3939);
+}

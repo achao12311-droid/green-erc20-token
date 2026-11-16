@@ -15,6 +15,7 @@ function gateError(error) {
 async function enterApp() {
   gate.hidden = true;
   shell.hidden = false;
+  await window.eco.opened();
   await loadSettings();
   await refreshAll();
   showPage("overview");
@@ -30,6 +31,13 @@ async function refreshAll() {
     document.querySelector("#overview-staked").textContent = state.staked + " ECO";
     document.querySelector("#receive-address").textContent = state.address;
     document.querySelector("#qr").src = await window.eco.qr();
+    const incoming = document.querySelector("#incoming");
+    incoming.innerHTML = "";
+    for (const row of state.incoming || []) {
+      const item = document.createElement("li");
+      item.textContent = "Received " + row.amount + " ECO from " + row.from;
+      incoming.append(item);
+    }
     document.querySelector("#connection").textContent = state.contract
       ? "Connected · block " + state.block
       : "Connected · set the contract in Settings";
@@ -76,6 +84,8 @@ async function loadSettings() {
 }
 
 document.querySelector("#show-create").addEventListener("click", () => showGate("gate-create"));
+document.querySelector("#show-create-from-open").addEventListener("click", () => showGate("gate-create"));
+document.querySelector("#create-back").addEventListener("click", () => showGate("gate-home"));
 document.querySelector("#show-open").addEventListener("click", () => showGate("gate-open"));
 document.querySelector("#show-restore").addEventListener("click", () => showGate("gate-restore"));
 
@@ -183,3 +193,22 @@ window.eco.exists().then((exists) => {
   document.querySelector("#show-open").hidden = !exists;
   if (exists) showGate("gate-open");
 });
+
+let approvalId = 0;
+function showApproval(prompt) {
+  const panel = document.querySelector("#approval");
+  if (!prompt) {
+    panel.hidden = true;
+    return;
+  }
+  approvalId = prompt.id;
+  document.querySelector("#approval-origin").textContent = prompt.origin || "";
+  document.querySelector("#approval-title").textContent = prompt.title || "Website request";
+  document.querySelector("#approval-detail").textContent = prompt.detail || "";
+  panel.hidden = false;
+}
+
+document.querySelector("#approval-allow").addEventListener("click", () => window.eco.decide(approvalId, true));
+document.querySelector("#approval-deny").addEventListener("click", () => window.eco.decide(approvalId, false));
+window.eco.onPrompt(showApproval);
+window.eco.currentPrompt().then(showApproval);

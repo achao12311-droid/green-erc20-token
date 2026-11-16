@@ -17,9 +17,9 @@ export type RewardPolicy = {
 };
 
 export const DEVELOPMENT_POLICY: RewardPolicy = {
-  version: 1,
-  conversionConfirmed: false,
-  weiPerPoint: null,
+  version: 2,
+  conversionConfirmed: true,
+  weiPerPoint: "10000000000000000",
   points: {
     PICK_UP_LITTER: 50,
     RECYCLING: 30,

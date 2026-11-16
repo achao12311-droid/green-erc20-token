@@ -5,7 +5,7 @@ const { signMint, submissionId } = require("../helpers/sign");
 describe("mint and stake", function () {
   it("stakes ECO that was minted from an attestation", async function () {
     const [attester, alice] = await ethers.getSigners();
-    const token = await ethers.deployContract("EcoToken", [0]);
+    const token = await ethers.deployContract("EcoToken", [0, attester.address]);
     const staking = await ethers.deployContract("EcoStaking", [await token.getAddress()]);
     const reward = ethers.parseEther("8");
     const signed = await signMint(attester, token, alice.address, submissionId("integration"), reward, 1n);
@@ -25,5 +25,17 @@ describe("mint and stake", function () {
     expect(await token.balanceOf(alice.address)).to.equal(0n);
     await staking.connect(alice).unstake(reward);
     expect(await token.balanceOf(alice.address)).to.equal(reward);
+
+    await expect(
+      token.mintWithAttestation(
+        alice.address,
+        signed.submissionId,
+        reward,
+        1n,
+        signed.deadline,
+        signed.recordHash,
+        signed.signature
+      )
+    ).to.be.revertedWithCustomError(token, "SubmissionAlreadyUsed");
   });
 });

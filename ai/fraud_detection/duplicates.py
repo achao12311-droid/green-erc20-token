@@ -8,7 +8,8 @@ def sha256_hex(payload):
 
 
 def compare_sha256(left, right):
-    return {"exact": left == right, "method": "sha256"}
+    """Compare file bytes. A different digest does not prove the activity is different."""
+    return {"exact": left == right, "method": "sha256", "scope": "identical_bytes_only"}
 
 
 def perceptual_status():

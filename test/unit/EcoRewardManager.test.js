@@ -5,7 +5,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 describe("EcoRewardManager", function () {
   async function deploy() {
     const [owner, alice, bob] = await ethers.getSigners();
-    const token = await ethers.deployContract("EcoToken", [ethers.parseEther("100")]);
+    const token = await ethers.deployContract("EcoToken", [ethers.parseEther("100"), owner.address]);
     const random = await ethers.deployContract("TestRandomnessSource");
     const manager = await ethers.deployContract("EcoRewardManager", [await token.getAddress(), await random.getAddress()]);
     await manager.waitForDeployment();
@@ -17,8 +17,8 @@ describe("EcoRewardManager", function () {
     return { token, random, manager, owner, alice, bob, lock };
   }
 
-  it("locks an entry, draws a winner with the test source, and returns the ECO", async function () {
-    const { token, random, manager, alice, bob, lock } = await deploy();
+  it("sells a ticket, draws a winner, and keeps the spent ECO", async function () {
+    const { token, random, manager, owner, alice, bob, lock } = await deploy();
     const start = BigInt(await time.latest());
     const end = start + 100n;
     await manager.createCampaign(start, end, lock, 1, 1);
@@ -31,11 +31,11 @@ describe("EcoRewardManager", function () {
     await random.fulfill(1, 1);
     const winners = await manager.winners(1);
     expect(winners.length).to.equal(1);
+    await expect(manager.connect(alice).withdraw(1)).to.be.revertedWithCustomError(manager, "NotWithdrawable");
 
-    const aliceBefore = await token.balanceOf(alice.address);
-    await manager.connect(alice).withdraw(1);
-    await manager.connect(bob).withdraw(1);
-    expect(await token.balanceOf(alice.address)).to.equal(aliceBefore + lock);
+    const ownerBefore = await token.balanceOf(owner.address);
+    await manager.collectTickets(1, owner.address);
+    expect(await token.balanceOf(owner.address)).to.equal(ownerBefore + lock * 2n);
     expect(await manager.totalLocked(1)).to.equal(0n);
   });
 
@@ -52,6 +52,36 @@ describe("EcoRewardManager", function () {
     await time.setNextBlockTimestamp(end);
     await expect(manager.close(1)).to.be.revertedWithCustomError(blocked, "RandomnessNotConfigured");
     expect((await manager.campaigns(1)).status).to.equal(0n);
+  });
+
+  it("accepts the original randomness source after the configured source changes", async function () {
+    const { random, manager, owner, alice, bob, lock } = await deploy();
+    const replacement = await ethers.deployContract("TestRandomnessSource");
+    const stranger = await ethers.deployContract("TestRandomnessSource");
+    const start = BigInt(await time.latest());
+    const end = start + 80n;
+    await manager.createCampaign(start, end, lock, 1, 1);
+    await manager.connect(alice).enter(1);
+    await manager.connect(bob).enter(1);
+    await time.setNextBlockTimestamp(end);
+    await manager.close(1);
+    expect(await manager.requestSource(1)).to.equal(await random.getAddress());
+
+    await manager.setRandomnessSource(await replacement.getAddress());
+    await expect(replacement.fulfillTo(await manager.getAddress(), 1, 7)).to.be.revertedWithCustomError(
+      manager,
+      "InvalidRandomnessSource"
+    );
+    await expect(stranger.fulfillTo(await manager.getAddress(), 1, 9)).to.be.revertedWithCustomError(
+      manager,
+      "InvalidRandomnessSource"
+    );
+
+    await random.fulfill(1, 1);
+    expect((await manager.campaigns(1)).status).to.equal(2n);
+    await expect(manager.connect(alice).withdraw(1)).to.be.revertedWithCustomError(manager, "NotWithdrawable");
+    await manager.collectTickets(1, owner.address);
+    expect(await manager.totalLocked(1)).to.equal(0n);
   });
 
   it("returns locked ECO after cancellation", async function () {

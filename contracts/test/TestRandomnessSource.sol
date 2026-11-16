@@ -16,4 +16,8 @@ contract TestRandomnessSource is IRandomnessSource {
     function fulfill(uint256 requestId, uint256 randomness) external {
         IRewardRandomReceiver(lastRequester).onRandomness(requestId, randomness);
     }
+
+    function fulfillTo(address receiver, uint256 requestId, uint256 randomness) external {
+        IRewardRandomReceiver(receiver).onRandomness(requestId, randomness);
+    }
 }

@@ -8,7 +8,7 @@ const MAX_SUPPLY = ethers.parseEther("1000000");
 describe("EcoToken", function () {
   async function deploy(initialSupply = INITIAL) {
     const [deployer, alice, bob] = await ethers.getSigners();
-    const token = await ethers.deployContract("EcoToken", [initialSupply]);
+    const token = await ethers.deployContract("EcoToken", [initialSupply, deployer.address]);
     await token.waitForDeployment();
     return { token, deployer, alice, bob };
   }
@@ -78,15 +78,18 @@ describe("EcoToken", function () {
   });
 
   it("moves administration only when the new owner accepts", async function () {
-    const { token, deployer, alice } = await deploy(0n);
+    const { token, deployer, alice, bob } = await deploy(0n);
+    await token.grantAttester(bob.address);
     await token.transferOwnership(alice.address);
     await expect(token.connect(alice).grantAttester(alice.address)).to.be.revertedWithCustomError(token, "OwnableUnauthorizedAccount");
+    expect(await token.owner()).to.equal(deployer.address);
     expect(await token.isAttester(deployer.address)).to.equal(true);
 
     await token.connect(alice).acceptOwnership();
     expect(await token.owner()).to.equal(alice.address);
-    await token.connect(alice).grantAttester(alice.address);
-    await token.connect(alice).revokeAttester(deployer.address);
+    expect(await token.isAttester(deployer.address)).to.equal(false);
+    expect(await token.isAttester(alice.address)).to.equal(false);
+    expect(await token.isAttester(bob.address)).to.equal(true);
 
     const stale = await signMint(deployer, token, alice.address, submissionId("stale"), ethers.parseEther("1"), 1n);
     await expect(
@@ -102,6 +105,72 @@ describe("EcoToken", function () {
     )
       .to.be.revertedWithCustomError(token, "InvalidAttester")
       .withArgs(deployer.address);
+
+    const kept = await signMint(bob, token, alice.address, submissionId("dedicated-attester"), ethers.parseEther("1"), 4n);
+    await token.mintWithAttestation(
+      alice.address,
+      kept.submissionId,
+      ethers.parseEther("1"),
+      4n,
+      kept.deadline,
+      kept.recordHash,
+      kept.signature
+    );
+    expect(await token.balanceOf(alice.address)).to.equal(ethers.parseEther("1"));
+  });
+
+  it("lets the owner revoke a dedicated attester", async function () {
+    const { token, deployer, alice, bob } = await deploy(0n);
+    await token.grantAttester(bob.address);
+    await token.revokeAttester(bob.address);
+    const revoked = await signMint(bob, token, alice.address, submissionId("revoked"), ethers.parseEther("1"), 2n);
+    await expect(
+      token.mintWithAttestation(
+        alice.address,
+        revoked.submissionId,
+        ethers.parseEther("1"),
+        2n,
+        revoked.deadline,
+        revoked.recordHash,
+        revoked.signature
+      )
+    )
+      .to.be.revertedWithCustomError(token, "InvalidAttester")
+      .withArgs(bob.address);
+    expect(await token.isAttester(deployer.address)).to.equal(true);
+  });
+
+  it("does not treat the owner as an attester unless that address is configured", async function () {
+    const [owner, attester, recipient] = await ethers.getSigners();
+    const token = await ethers.deployContract("EcoToken", [0, attester.address]);
+    expect(await token.owner()).to.equal(owner.address);
+    expect(await token.isAttester(owner.address)).to.equal(false);
+    expect(await token.isAttester(attester.address)).to.equal(true);
+
+    const unsignedOwner = await signMint(owner, token, recipient.address, submissionId("owner-cannot-mint"), ethers.parseEther("1"), 1n);
+    await expect(
+      token.mintWithAttestation(
+        recipient.address,
+        unsignedOwner.submissionId,
+        ethers.parseEther("1"),
+        1n,
+        unsignedOwner.deadline,
+        unsignedOwner.recordHash,
+        unsignedOwner.signature
+      )
+    ).to.be.revertedWithCustomError(token, "InvalidAttester");
+
+    const signed = await signMint(attester, token, recipient.address, submissionId("configured-attester"), ethers.parseEther("1"), 1n);
+    await token.mintWithAttestation(
+      recipient.address,
+      signed.submissionId,
+      ethers.parseEther("1"),
+      1n,
+      signed.deadline,
+      signed.recordHash,
+      signed.signature
+    );
+    expect(await token.balanceOf(recipient.address)).to.equal(ethers.parseEther("1"));
   });
 
   it("pauses new mints without blocking a transfer", async function () {
@@ -129,7 +198,8 @@ describe("EcoToken", function () {
     const { token } = await deploy();
     await expect(token.transfer(await token.getAddress(), 1n)).to.be.revertedWithCustomError(token, "DirectTransferToContract");
     const factory = await ethers.getContractFactory("EcoToken");
-    await expect(factory.deploy(MAX_SUPPLY)).to.be.revertedWithCustomError(factory, "MaxSupplyExceeded");
+    const [deployer] = await ethers.getSigners();
+    await expect(factory.deploy(MAX_SUPPLY, deployer.address)).to.be.revertedWithCustomError(factory, "MaxSupplyExceeded");
   });
 
   it("does not contain a gram conversion", async function () {

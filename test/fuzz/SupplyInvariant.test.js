@@ -5,7 +5,7 @@ const { signMint, submissionId } = require("../helpers/sign");
 describe("supply invariant", function () {
   it("keeps the sum of attested rewards inside the cap", async function () {
     const [attester, alice] = await ethers.getSigners();
-    const token = await ethers.deployContract("EcoToken", [0]);
+    const token = await ethers.deployContract("EcoToken", [0, attester.address]);
     let supply = 0n;
     for (let i = 0; i < 20; i++) {
       const whole = BigInt((i * 17) % 9) + 1n;

@@ -10,15 +10,29 @@ test("actions expose points and an unauthenticated claim is rejected", async () 
   const app = await buildServer();
   const actions = await app.inject({ method: "GET", url: "/api/v1/actions" });
   assert.equal(actions.statusCode, 200);
-  assert.equal(actions.json().conversionConfirmed, false);
+  assert.equal(actions.json().conversionConfirmed, true);
   const claim = await app.inject({ method: "POST", url: "/api/v1/rewards/claim/missing" });
   assert.equal(claim.statusCode, 401);
   await app.close();
 });
 
-test("an approved submission cannot claim ECO while the conversion is unconfirmed", async () => {
+test("an approved submission prepares the scheduled ECO amount", async () => {
   process.env.ADMIN_ADDRESSES = wallet.address.toLowerCase();
-  const app = await buildServer({ policy: DEVELOPMENT_POLICY });
+  const app = await buildServer({
+    policy: DEVELOPMENT_POLICY,
+    verifier: async () => ({
+      decision: "approved",
+      reason: "action_match",
+      predictedAction: "PARK_CLEANUP",
+      modelsConfigured: true,
+      exactDuplicate: false,
+      nearDuplicate: false,
+      perceptual: "average_hash",
+      observedLabels: ["ashcan"],
+      frameHashes: ["0000000000000000"],
+      model: "test-double",
+    }),
+  });
   const cookie = await signIn(app);
   const created = await app.inject({
     method: "POST",
@@ -35,20 +49,35 @@ test("an approved submission cannot claim ECO while the conversion is unconfirme
     payload: { action: "TREE_PLANTING", description: "different" },
   });
   assert.equal(again.json().id, id);
-  const review = await app.inject({
+  const draftReview = await app.inject({
     method: "POST",
     url: "/api/v1/admin/reviews/" + id,
     headers: { cookie },
-    payload: { decision: "approved" },
+    payload: { decision: "approved", reason: "too early" },
   });
-  assert.equal(review.statusCode, 200, review.body);
+  assert.equal(draftReview.statusCode, 409);
+  assert.equal(draftReview.json().error, "review_not_eligible");
+  assert.ok(draftReview.json().blockers.includes("video_missing"));
+  const uploaded = await app.inject({
+    method: "POST",
+    url: "/api/v1/submissions/" + id + "/video-upload",
+    headers: { cookie, "content-type": "video/mp4" },
+    payload: Buffer.from("video-bytes"),
+  });
+  assert.equal(uploaded.statusCode, 200, uploaded.body);
+  assert.equal(uploaded.json().bytesStored, true);
+  const verified = await app.inject({ method: "POST", url: "/api/v1/ai/verify/" + id, headers: { cookie } });
+  assert.equal(verified.statusCode, 200, verified.body);
+  assert.equal(verified.json().decision, "approved");
+  assert.equal(verified.json().models.action.status, "configured");
   const claim = await app.inject({
     method: "POST",
     url: "/api/v1/rewards/claim/" + id,
     headers: { cookie },
   });
-  assert.equal(claim.statusCode, 409);
-  assert.equal(claim.json().error, "conversion_unconfirmed");
+  assert.equal(claim.statusCode, 201, claim.body);
+  assert.equal(claim.json().wei, (100n * 10n ** 16n).toString());
+  assert.equal(claim.json().signature, null);
   await app.close();
 });
 
